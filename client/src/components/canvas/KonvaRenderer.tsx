@@ -54,9 +54,13 @@ export const KonvaRenderer: React.FC<KonvaRendererProps> = ({ elements, width, h
 
     const newElements = elements.map(el => {
       if (el.id === id) {
-        const newWidth = Math.max(5, (el.width || 0) * scaleX);
-        const newHeight = Math.max(5, (el.height || 0) * scaleY);
-        const newRadius = Math.max(5, (el.radius || 0) * scaleX); // Approximate for circle
+        const currentWidth = ensureNumber(el.width, 100);
+        const currentHeight = ensureNumber(el.height, 100);
+        const currentRadius = ensureNumber(el.radius, 50);
+
+        const newWidth = Math.max(5, currentWidth * scaleX);
+        const newHeight = Math.max(5, currentHeight * scaleY);
+        const newRadius = Math.max(5, currentRadius * scaleX); // Approximate for circle
 
         return {
           ...el,
@@ -73,6 +77,12 @@ export const KonvaRenderer: React.FC<KonvaRendererProps> = ({ elements, width, h
     onChange(newElements);
   };
 
+  // Helper to ensure number for Konva
+  const ensureNumber = (val: string | number | undefined, defaultVal: number = 0): number => {
+    if (typeof val === 'number') return val;
+    if (typeof val === 'string') return parseInt(val, 10) || defaultVal;
+    return defaultVal;
+  };
 
   return (
     <Stage 
@@ -90,15 +100,18 @@ export const KonvaRenderer: React.FC<KonvaRendererProps> = ({ elements, width, h
       <Layer>
         {/* Grid Background - simulated with a big rect for click capture if needed, or just CSS behind it */}
         {elements.map((el) => {
+          // Skip container/flex types in Konva for now, or render them as groups if we wanted to be advanced
+          if (el.type === 'container') return null;
+
           if (el.type === 'rect') {
             return (
               <Rect
                 key={el.id}
                 id={el.id}
-                x={el.x}
-                y={el.y}
-                width={el.width}
-                height={el.height}
+                x={ensureNumber(el.x)}
+                y={ensureNumber(el.y)}
+                width={ensureNumber(el.width, 100)}
+                height={ensureNumber(el.height, 100)}
                 fill={el.fill}
                 draggable
                 onClick={() => onSelect(el.id)}
@@ -115,9 +128,9 @@ export const KonvaRenderer: React.FC<KonvaRendererProps> = ({ elements, width, h
               <Circle
                 key={el.id}
                 id={el.id}
-                x={el.x + (el.radius || 0)} // Konva circle x/y is center, but our model might be top-left based. Let's adjust.
-                y={el.y + (el.radius || 0)}
-                radius={el.radius}
+                x={ensureNumber(el.x) + ensureNumber(el.radius)} 
+                y={ensureNumber(el.y) + ensureNumber(el.radius)}
+                radius={ensureNumber(el.radius, 50)}
                 fill={el.fill}
                 draggable
                 onClick={() => onSelect(el.id)}
@@ -125,7 +138,8 @@ export const KonvaRenderer: React.FC<KonvaRendererProps> = ({ elements, width, h
                     // Adjust back to top-left model if needed, or just store center
                      const newElements = elements.map(item => {
                         if (item.id === el.id) {
-                            return { ...item, x: e.target.x() - (item.radius || 0), y: e.target.y() - (item.radius || 0) };
+                            const r = ensureNumber(item.radius);
+                            return { ...item, x: e.target.x() - r, y: e.target.y() - r };
                         }
                         return item;
                     });
@@ -141,8 +155,8 @@ export const KonvaRenderer: React.FC<KonvaRendererProps> = ({ elements, width, h
               <Text
                 key={el.id}
                 id={el.id}
-                x={el.x}
-                y={el.y}
+                x={ensureNumber(el.x)}
+                y={ensureNumber(el.y)}
                 text={el.text}
                 fontSize={el.fontSize}
                 fill={el.fill}
