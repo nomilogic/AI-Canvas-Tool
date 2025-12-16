@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Settings, Key } from 'lucide-react';
+import { Settings, Key, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -12,6 +12,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { testConnection } from '../../lib/gemini';
+import { toast } from 'sonner';
 
 interface ApiKeyModalProps {
   apiKey: string;
@@ -21,10 +23,28 @@ interface ApiKeyModalProps {
 export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ apiKey, onSave }) => {
   const [value, setValue] = useState(apiKey);
   const [open, setOpen] = useState(false);
+  const [status, setStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
 
   const handleSave = () => {
     onSave(value);
     setOpen(false);
+  };
+
+  const handleTest = async () => {
+    if (!value) return;
+    setStatus('testing');
+    try {
+      const success = await testConnection(value);
+      if (success) {
+        setStatus('success');
+        toast.success("Connection successful!");
+      } else {
+        setStatus('error');
+        toast.error("Connection failed. Check key.");
+      }
+    } catch (e) {
+      setStatus('error');
+    }
   };
 
   return (
@@ -53,9 +73,29 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ apiKey, onSave }) => {
                 type="password"
                 placeholder="AIzaSy..."
                 value={value}
-                onChange={(e) => setValue(e.target.value)}
+                onChange={(e) => {
+                    setValue(e.target.value);
+                    setStatus('idle');
+                }}
                 className="bg-black/20 border-white/10 text-white placeholder:text-white/20 focus:border-violet-500/50 flex-1"
                 />
+                <Button 
+                    variant="outline" 
+                    size="icon" 
+                    onClick={handleTest}
+                    disabled={!value || status === 'testing'}
+                    className={`shrink-0 border-white/10 ${
+                        status === 'success' ? 'text-green-400 border-green-400/50 bg-green-400/10' :
+                        status === 'error' ? 'text-red-400 border-red-400/50 bg-red-400/10' :
+                        'text-white/60 hover:text-white hover:bg-white/5'
+                    }`}
+                >
+                    {status === 'testing' ? <Loader2 className="w-4 h-4 animate-spin" /> :
+                     status === 'success' ? <CheckCircle2 className="w-4 h-4" /> :
+                     status === 'error' ? <XCircle className="w-4 h-4" /> :
+                     <div className="text-xs font-mono">Test</div>
+                    }
+                </Button>
             </div>
             <p className="text-xs text-white/40">
               {import.meta.env.VITE_GEMINI_API_KEY ? (

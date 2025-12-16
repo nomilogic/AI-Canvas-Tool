@@ -58,9 +58,16 @@ export default function CanvasTool() {
       const newElements = await generateLayout(apiKey, prompt, elements);
       setElements(newElements);
       toast.success("AI updated the layout");
-    } catch (error) {
-      console.error(error);
-      toast.error("AI Generation failed.");
+    } catch (error: any) {
+      console.error("Full AI Error:", error);
+      const msg = error?.message || "AI Generation failed";
+      if (msg.includes("404")) {
+        toast.error("Model not found (404). Trying a different model...");
+      } else if (msg.includes("403") || msg.includes("key")) {
+        toast.error("Invalid API Key. Please check settings.");
+      } else {
+        toast.error(`AI Error: ${msg.slice(0, 50)}...`);
+      }
     } finally {
       setIsProcessing(false);
     }

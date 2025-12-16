@@ -103,32 +103,62 @@ INSTRUCTIONS:
 `;
 
 export async function generateLayout(apiKey: string, prompt: string, currentElements: CanvasElement[]): Promise<CanvasElement[]> {
+  const genAI = new GoogleGenerativeAI(apiKey);
+  
+  // List of models to try in order
+  const modelsToTry = ["gemini-1.5-flash", "gemini-pro", "gemini-1.0-pro-latest"];
+  
+  let lastError = null;
+
+  for (const modelName of modelsToTry) {
+    try {
+      console.log(`Attempting to generate with model: ${modelName}`);
+      const model = genAI.getGenerativeModel({ model: modelName });
+
+      const context = `
+      CURRENT JSON STATE:
+      ${JSON.stringify(currentElements, null, 2)}
+      
+      USER COMMAND:
+      "${prompt}"
+      
+      Return the fully updated JSON array:
+      `;
+
+      const result = await model.generateContent([
+        SYSTEM_PROMPT,
+        context
+      ]);
+
+      const response = result.response;
+      const text = response.text();
+      const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
+      
+      return JSON.parse(cleanJson);
+
+    } catch (error: any) {
+      console.warn(`Failed with model ${modelName}:`, error);
+      lastError = error;
+      
+      // If it's a 404, we continue to the next model. 
+      // If it's a 403 (Permission/Key), we might as well stop, but trying others doesn't hurt.
+      continue;
+    }
+  }
+
+  // If we get here, all models failed
+  console.error("All AI models failed.");
+  throw lastError;
+}
+
+export async function testConnection(apiKey: string): Promise<boolean> {
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-    const context = `
-    CURRENT JSON STATE:
-    ${JSON.stringify(currentElements, null, 2)}
-    
-    USER COMMAND:
-    "${prompt}"
-    
-    Return the fully updated JSON array:
-    `;
-
-    const result = await model.generateContent([
-      SYSTEM_PROMPT,
-      context
-    ]);
-
-    const response = result.response;
-    const text = response.text();
-    const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    
-    return JSON.parse(cleanJson);
-  } catch (error) {
-    console.error("AI Generation failed:", error);
-    throw error;
+    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    await model.generateContent("Test");
+    return true;
+  } catch (e) {
+    console.error("Test connection failed:", e);
+    return false;
   }
 }
