@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { KonvaRenderer } from '../components/canvas/KonvaRenderer';
 import { DOMRenderer } from '../components/canvas/DOMRenderer';
 import { CommandBar } from '../components/canvas/CommandBar';
 import { parsePromptToElement, CanvasElement } from '../lib/ai-parser';
-import { Layers, Monitor, Code, Sparkles } from 'lucide-react';
+import { generateLayout } from '../lib/gemini';
+import { ApiKeyModal } from '../components/modals/ApiKeyModal';
+import { Layers, Monitor, Code, Sparkles, BrainCircuit } from 'lucide-react';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
 
@@ -12,31 +14,57 @@ export default function CanvasTool() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mode, setMode] = useState<'canvas' | 'dom'>('canvas');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
 
   const CANVAS_WIDTH = 800;
   const CANVAS_HEIGHT = 600;
 
+  const handleApiKeySave = (key: string) => {
+    setApiKey(key);
+    localStorage.setItem('gemini_api_key', key);
+    toast.success("API Key saved!");
+  };
+
   const handleCommand = async (prompt: string) => {
     setIsProcessing(true);
     
-    // Simulate AI delay
-    setTimeout(() => {
-      const newElement = parsePromptToElement(prompt, CANVAS_WIDTH, CANVAS_HEIGHT);
-      if (newElement) {
-        setElements(prev => [...prev, newElement]);
-        toast.success("Element created successfully!");
+    try {
+      if (apiKey) {
+        // Use Real AI
+        try {
+          const newElements = await generateLayout(apiKey, prompt, elements);
+          // For the real AI, we replace the state because the AI returns the *complete* new state
+          setElements(newElements);
+          toast.success("AI updated the canvas");
+        } catch (error) {
+          console.error(error);
+          toast.error("AI Generation failed. Check your API Key.");
+        }
       } else {
-        toast.error("Could not understand command.");
+        // Fallback to Heuristic Parser
+        toast.info("Using basic parser (No API Key provided)");
+        // Simulate delay for feel
+        await new Promise(r => setTimeout(r, 600));
+        const newElement = parsePromptToElement(prompt, CANVAS_WIDTH, CANVAS_HEIGHT);
+        if (newElement) {
+          setElements(prev => [...prev, newElement]);
+          toast.success("Element created");
+        } else {
+          toast.error("Could not understand command");
+        }
       }
+    } catch (e) {
+      toast.error("Something went wrong");
+    } finally {
       setIsProcessing(false);
-    }, 600);
+    }
   };
 
   const suggestions = [
-    "Create a dark blue box 100px width on top left",
-    "Add a red circle in the center",
-    "Write 'Hello World' at 200, 300",
-    "Create a purple box bottom right",
+    "Create a modern pricing card layout",
+    "Draw a mobile app navigation bar",
+    "Create a hero section with headline and buttons",
+    "Add a notification badge on top right",
   ];
 
   return (
@@ -71,10 +99,20 @@ export default function CanvasTool() {
         </div>
 
         <div className="flex items-center gap-4">
-            <div className="text-xs text-white/40 flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                System Ready
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-xs font-medium">
+                {apiKey ? (
+                    <>
+                        <BrainCircuit className="w-3 h-3 text-green-400" />
+                        <span className="text-green-400">Gemini Active</span>
+                    </>
+                ) : (
+                    <>
+                        <div className="w-2 h-2 rounded-full bg-yellow-500/50"></div>
+                        <span className="text-white/40">Basic Mode</span>
+                    </>
+                )}
             </div>
+            <ApiKeyModal apiKey={apiKey} onSave={handleApiKeySave} />
         </div>
       </header>
 
