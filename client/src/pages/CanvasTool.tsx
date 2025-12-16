@@ -15,7 +15,10 @@ export default function CanvasTool() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mode, setMode] = useState<'canvas' | 'dom' | 'json' | 'code'>('dom');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
+  // Priority: Local Storage -> Env Var -> Empty
+  const [apiKey, setApiKey] = useState(() => {
+    return localStorage.getItem('gemini_api_key') || import.meta.env.VITE_GEMINI_API_KEY || '';
+  });
   const [jsonInput, setJsonInput] = useState('');
 
   const CANVAS_WIDTH = 800;

@@ -47,16 +47,24 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ apiKey, onSave }) => {
         <div className="flex flex-col gap-4 py-4">
           <div className="grid w-full items-center gap-1.5">
             <Label htmlFor="apiKey" className="text-white/80">Gemini API Key</Label>
-            <Input
-              id="apiKey"
-              type="password"
-              placeholder="AIzaSy..."
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              className="bg-black/20 border-white/10 text-white placeholder:text-white/20 focus:border-violet-500/50"
-            />
+            <div className="flex gap-2">
+                <Input
+                id="apiKey"
+                type="password"
+                placeholder="AIzaSy..."
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                className="bg-black/20 border-white/10 text-white placeholder:text-white/20 focus:border-violet-500/50 flex-1"
+                />
+            </div>
             <p className="text-xs text-white/40">
-              Your key is stored locally in your browser and never sent to our servers.
+              {import.meta.env.VITE_GEMINI_API_KEY ? (
+                  <span className="text-green-400">✓ Detected from Environment (VITE_GEMINI_API_KEY)</span>
+              ) : (
+                  <span>
+                    If you added a secret, make sure it is named <code className="bg-white/10 px-1 rounded">VITE_GEMINI_API_KEY</code> to be detected automatically.
+                  </span>
+              )}
             </p>
           </div>
         </div>
