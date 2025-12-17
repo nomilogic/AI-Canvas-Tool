@@ -39,6 +39,7 @@ export interface TemplateElement {
   zIndex: number;
   filters?: FilterProps;
   shadow?: ShadowProps;
+  locked?: boolean;
 }
 
 export interface TextElement extends TemplateElement {
