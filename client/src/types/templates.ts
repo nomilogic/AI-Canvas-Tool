@@ -30,7 +30,8 @@ export interface GradientProps {
 
 export interface TemplateElement {
   id: string;
-  type: 'text' | 'logo' | 'shape' | 'svg' | 'image';
+  name?: string; // User friendly name
+  type: 'text' | 'logo' | 'shape' | 'svg' | 'image' | 'group';
   x: number;
   y: number;
   width: number;
@@ -40,6 +41,12 @@ export interface TemplateElement {
   filters?: FilterProps;
   shadow?: ShadowProps;
   locked?: boolean;
+  visible?: boolean;
+}
+
+export interface GroupElement extends TemplateElement {
+  type: 'group';
+  children: string[]; // IDs of children elements
 }
 
 export interface TextElement extends TemplateElement {
@@ -98,7 +105,7 @@ export interface Template {
     width: number;
     height: number;
   };
-  elements: (TextElement | LogoElement | ShapeElement | SvgElement)[];
+  elements: (TextElement | LogoElement | ShapeElement | SvgElement | GroupElement)[];
   thumbnail?: string;
   isPremium?: boolean;
 }
