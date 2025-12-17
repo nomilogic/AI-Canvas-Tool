@@ -102,12 +102,49 @@ INSTRUCTIONS:
 - Be creative with colors and spacing.
 `;
 
-export async function generateLayout(apiKey: string, prompt: string, currentElements: CanvasElement[]): Promise<CanvasElement[]> {
+export async function generateLayout(
+  apiKey: string,
+  prompt: string,
+  currentElements: CanvasElement[],
+): Promise<CanvasElement[]> {
   const genAI = new GoogleGenerativeAI(apiKey);
-  
+
   // List of models to try in order
-  const modelsToTry = ["gemini-1.5-flash", "gemini-pro", "gemini-1.0-pro-latest"];
-  
+  const modelsToTry = [
+    // Latest Generation (Gemini 3.0)
+    // These represent the most advanced models (often accessed via the 'gemini-3.0' alias)
+    "gemini-3.0-flash", // alias "gemini-3.0"
+    "gemini-3.0-pro", // alias "gemini-3.0"
+
+    // Current Stable Generation (Gemini 2.5)
+    // Recommended for general production use cases
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash-image", // Specialized image generation model
+    "gemini-live-2.5-flash-native-audio", // For real-time, bidirectional streaming
+
+    // Aliases that point to the latest stable version of the 2.5 models
+    "gemini-2.5-flash-latest",
+    "gemini-2.5-pro-latest",
+    "gemini-2.5-flash-lite-latest",
+
+    // Previous Generation Stable Models (Gemini 2.0)
+    // Still available but superseded by 2.5 models
+    "gemini-2.0-flash-001",
+    "gemini-2.0-flash-lite-001",
+
+    // Specialized Image and Video Models
+    "imagen-3.0-generate-002", // Image generation model
+    "veo-3.1-generate-001", // Video generation model
+
+    // Embedding Models
+    "gemini-embedding-001",
+    "text-embedding-005",
+    "text-embedding-004",
+    "text-multilingual-embedding-002",
+  ];
+
   let lastError = null;
 
   for (const modelName of modelsToTry) {
@@ -125,22 +162,21 @@ export async function generateLayout(apiKey: string, prompt: string, currentElem
       Return the fully updated JSON array:
       `;
 
-      const result = await model.generateContent([
-        SYSTEM_PROMPT,
-        context
-      ]);
+      const result = await model.generateContent([SYSTEM_PROMPT, context]);
 
       const response = result.response;
       const text = response.text();
-      const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
-      
-      return JSON.parse(cleanJson);
+      const cleanJson = text
+        .replace(/```json/g, "")
+        .replace(/```/g, "")
+        .trim();
 
+      return JSON.parse(cleanJson);
     } catch (error: any) {
       console.warn(`Failed with model ${modelName}:`, error);
       lastError = error;
-      
-      // If it's a 404, we continue to the next model. 
+
+      // If it's a 404, we continue to the next model.
       // If it's a 403 (Permission/Key), we might as well stop, but trying others doesn't hurt.
       continue;
     }
