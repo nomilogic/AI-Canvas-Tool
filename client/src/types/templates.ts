@@ -10,6 +10,15 @@ export interface FilterProps {
   sepia?: number;
 }
 
+export interface ShadowProps {
+  enabled: boolean;
+  color: string;
+  blur: number;
+  opacity: number;
+  offsetX: number;
+  offsetY: number;
+}
+
 export interface GradientProps {
   enabled: boolean;
   type: 'linear' | 'radial';
@@ -29,6 +38,7 @@ export interface TemplateElement {
   rotation?: number;
   zIndex: number;
   filters?: FilterProps;
+  shadow?: ShadowProps;
 }
 
 export interface TextElement extends TemplateElement {

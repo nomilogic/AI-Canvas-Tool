@@ -6,9 +6,9 @@ import {
   Type, Image as ImageIcon, Square, Circle as CircleIcon, 
   Triangle, Star, Palette, Layers, Download, 
   Settings, Undo, Redo, Trash2, Move, Monitor, Smartphone,
-  Hexagon, Wand2, MousePointer2
+  Hexagon, Wand2, MousePointer2, BringToFront, SendToBack
 } from "lucide-react";
-import { TemplateElement, TextElement, ShapeElement, SvgElement, LogoElement, FilterProps, GradientProps } from "../types/templates";
+import { TemplateElement, TextElement, ShapeElement, SvgElement, LogoElement, FilterProps, GradientProps, ShadowProps } from "../types/templates";
 import "../styles/template-editor.css";
 
 // URLImage Component for loading images
@@ -162,6 +162,19 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     setSelectedId(null);
   };
 
+  // Layer Management
+  const bringToFront = () => {
+    if (!selectedId) return;
+    const maxZ = Math.max(...elements.map(e => e.zIndex));
+    updateElement(selectedId, { zIndex: maxZ + 1 });
+  };
+
+  const sendToBack = () => {
+    if (!selectedId) return;
+    const minZ = Math.min(...elements.map(e => e.zIndex));
+    updateElement(selectedId, { zIndex: minZ - 1 });
+  };
+
   // Apply Filter
   const updateFilter = (filterName: keyof FilterProps, value: number) => {
     if (!selectedId) return;
@@ -174,22 +187,58 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     });
   };
 
-  // Apply Gradient
-  const toggleGradient = (enabled: boolean) => {
+  // Apply Shadow
+  const updateShadow = (shadowAttrs: Partial<ShadowProps>) => {
     if (!selectedId) return;
     const el = elements.find(e => e.id === selectedId);
-    if (!el || (el.type !== 'shape' && el.type !== 'text')) return;
+    if (!el) return;
 
+    const currentShadow = el.shadow || {
+      enabled: true,
+      color: '#000000',
+      blur: 10,
+      opacity: 0.5,
+      offsetX: 5,
+      offsetY: 5
+    };
+
+    updateElement(selectedId, {
+      shadow: { ...currentShadow, ...shadowAttrs, enabled: true }
+    });
+  };
+
+  const toggleShadow = (enabled: boolean) => {
+    if (!selectedId) return;
     if (enabled) {
-      updateElement(selectedId, {
-        gradient: {
-          enabled: true,
-          type: 'linear',
-          stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }],
-          start: { x: 0, y: 0 },
-          end: { x: 100, y: 100 } // relative to shape
-        }
-      });
+      updateShadow({});
+    } else {
+      updateElement(selectedId, { shadow: undefined });
+    }
+  };
+
+  // Apply Gradient
+  const updateGradient = (gradAttrs: Partial<GradientProps>) => {
+    if (!selectedId) return;
+    const el = elements.find(e => e.id === selectedId);
+    if (!el) return;
+
+    const currentGradient = (el as any).gradient || {
+      enabled: true,
+      type: 'linear',
+      stops: [{ offset: 0, color: '#ff0000' }, { offset: 1, color: '#0000ff' }],
+      start: { x: 0, y: 0 },
+      end: { x: 100, y: 100 }
+    };
+
+    updateElement(selectedId, {
+      gradient: { ...currentGradient, ...gradAttrs, enabled: true }
+    });
+  };
+
+  const toggleGradient = (enabled: boolean) => {
+    if (!selectedId) return;
+    if (enabled) {
+      updateGradient({});
     } else {
       updateElement(selectedId, { gradient: undefined });
     }
@@ -332,6 +381,18 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                   };
                 }
 
+                // Shadow logic
+                let shadowProps: any = {};
+                if (el.shadow?.enabled) {
+                  shadowProps = {
+                    shadowColor: el.shadow.color,
+                    shadowBlur: el.shadow.blur,
+                    shadowOpacity: el.shadow.opacity,
+                    shadowOffsetX: el.shadow.offsetX,
+                    shadowOffsetY: el.shadow.offsetY,
+                  };
+                }
+
                 if (el.type === 'text') {
                   const textEl = el as TextElement;
                   return (
@@ -342,6 +403,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                       fontFamily={textEl.fontFamily}
                       align={textEl.textAlign}
                       {...fillProps}
+                      {...shadowProps}
                       filters={filters}
                       blurRadius={el.filters?.blur}
                       brightness={el.filters?.brightness}
@@ -358,6 +420,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                         offsetX={-shapeEl.width / 2} // Center adjustment if needed, but Circle uses radius
                         offsetY={-shapeEl.height / 2}
                         {...fillProps}
+                        {...shadowProps}
                         opacity={shapeEl.opacity}
                         filters={filters}
                       />
@@ -369,6 +432,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                         {...commonProps}
                         cornerRadius={shapeEl.borderRadius}
                         {...fillProps}
+                        {...shadowProps}
                         opacity={shapeEl.opacity}
                         filters={filters}
                       />
@@ -379,6 +443,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                       {...commonProps}
                       cornerRadius={shapeEl.borderRadius}
                       {...fillProps}
+                      {...shadowProps}
                       opacity={shapeEl.opacity}
                       filters={filters}
                     />
@@ -391,6 +456,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                         src={imgEl.src}
                         opacity={imgEl.opacity}
                         filters={filters}
+                        {...shadowProps}
                      />
                    );
                 } else if (el.type === 'svg') {
@@ -400,6 +466,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                       {...commonProps}
                       data={svgEl.content}
                       {...fillProps}
+                      {...shadowProps}
                       scaleX={el.width / 100} // Rough scaling for path
                       scaleY={el.height / 100}
                     />
@@ -423,26 +490,64 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
           <div className="p-4 space-y-6">
             
             {/* Common Properties */}
-            <div className="space-y-2">
-              <label className="text-xs text-gray-400">Position</label>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <span className="text-xs text-gray-500">X</span>
-                  <input 
-                    type="number" 
-                    value={Math.round(selectedElement.x)} 
-                    onChange={(e) => updateElement(selectedElement.id, { x: Number(e.target.value) })}
-                    className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm mt-1"
-                  />
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-semibold text-gray-400">Layer Order</span>
+                <div className="flex gap-2">
+                  <button onClick={bringToFront} className="p-1 hover:bg-[#3e3e42] rounded" title="Bring to Front">
+                    <BringToFront size={16} />
+                  </button>
+                  <button onClick={sendToBack} className="p-1 hover:bg-[#3e3e42] rounded" title="Send to Back">
+                    <SendToBack size={16} />
+                  </button>
                 </div>
-                <div>
-                  <span className="text-xs text-gray-500">Y</span>
-                  <input 
-                    type="number" 
-                    value={Math.round(selectedElement.y)} 
-                    onChange={(e) => updateElement(selectedElement.id, { y: Number(e.target.value) })}
-                    className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm mt-1"
-                  />
+              </div>
+
+              <div>
+                <label className="text-xs text-gray-400">Dimensions</label>
+                <div className="grid grid-cols-2 gap-2 mt-1">
+                  <div>
+                    <span className="text-xs text-gray-500">W</span>
+                    <input 
+                      type="number" 
+                      value={Math.round(selectedElement.width)} 
+                      onChange={(e) => updateElement(selectedElement.id, { width: Number(e.target.value) })}
+                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-xs text-gray-500">H</span>
+                    <input 
+                      type="number" 
+                      value={Math.round(selectedElement.height)} 
+                      onChange={(e) => updateElement(selectedElement.id, { height: Number(e.target.value) })}
+                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs text-gray-400">Position</label>
+                <div className="grid grid-cols-2 gap-2 mt-1">
+                  <div>
+                    <span className="text-xs text-gray-500">X</span>
+                    <input 
+                      type="number" 
+                      value={Math.round(selectedElement.x)} 
+                      onChange={(e) => updateElement(selectedElement.id, { x: Number(e.target.value) })}
+                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-xs text-gray-500">Y</span>
+                    <input 
+                      type="number" 
+                      value={Math.round(selectedElement.y)} 
+                      onChange={(e) => updateElement(selectedElement.id, { y: Number(e.target.value) })}
+                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -476,6 +581,34 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                     className="w-full mt-1 template-range"
                   />
                 </div>
+                 <div className="pt-2 border-t border-[#3e3e42]">
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs text-gray-400">Gradient</label>
+                    <input 
+                      type="checkbox" 
+                      checked={!!(selectedElement as any).gradient?.enabled}
+                      onChange={(e) => toggleGradient(e.target.checked)}
+                    />
+                  </div>
+                  {(selectedElement as any).gradient?.enabled && (
+                    <div className="space-y-2">
+                      <div className="flex gap-2">
+                        <input 
+                          type="color" 
+                          value={(selectedElement as any).gradient.stops[0].color}
+                          onChange={(e) => updateGradient({ stops: [{ offset: 0, color: e.target.value }, (selectedElement as any).gradient.stops[1]] })}
+                          className="w-full h-6 bg-[#3e3e42] rounded cursor-pointer"
+                        />
+                         <input 
+                          type="color" 
+                          value={(selectedElement as any).gradient.stops[1].color}
+                          onChange={(e) => updateGradient({ stops: [(selectedElement as any).gradient.stops[0], { offset: 1, color: e.target.value }] })}
+                          className="w-full h-6 bg-[#3e3e42] rounded cursor-pointer"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -490,13 +623,33 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                     className="w-full h-8 bg-[#3e3e42] rounded cursor-pointer mt-1"
                   />
                 </div>
-                 <div className="flex items-center justify-between">
-                  <label className="text-xs text-gray-400">Gradient</label>
-                  <input 
-                    type="checkbox" 
-                    checked={!!(selectedElement as any).gradient?.enabled}
-                    onChange={(e) => toggleGradient(e.target.checked)}
-                  />
+                 <div className="pt-2 border-t border-[#3e3e42]">
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs text-gray-400">Gradient</label>
+                    <input 
+                      type="checkbox" 
+                      checked={!!(selectedElement as any).gradient?.enabled}
+                      onChange={(e) => toggleGradient(e.target.checked)}
+                    />
+                  </div>
+                   {(selectedElement as any).gradient?.enabled && (
+                    <div className="space-y-2">
+                       <div className="flex gap-2">
+                        <input 
+                          type="color" 
+                          value={(selectedElement as any).gradient.stops[0].color}
+                          onChange={(e) => updateGradient({ stops: [{ offset: 0, color: e.target.value }, (selectedElement as any).gradient.stops[1]] })}
+                          className="w-full h-6 bg-[#3e3e42] rounded cursor-pointer"
+                        />
+                         <input 
+                          type="color" 
+                          value={(selectedElement as any).gradient.stops[1].color}
+                          onChange={(e) => updateGradient({ stops: [(selectedElement as any).gradient.stops[0], { offset: 1, color: e.target.value }] })}
+                          className="w-full h-6 bg-[#3e3e42] rounded cursor-pointer"
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -515,13 +668,41 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                </div>
             )}
 
-            {/* Filters Section */}
+            {/* Filters & Effects Section */}
             <div className="space-y-3 pt-4 border-t border-[#3e3e42]">
               <div className="flex items-center gap-2 mb-2">
                 <Wand2 size={14} className="text-blue-400"/>
-                <span className="text-xs font-semibold text-gray-300">Filters</span>
+                <span className="text-xs font-semibold text-gray-300">Effects & Filters</span>
               </div>
               
+              {/* Shadow/Glow Control */}
+              <div className="mb-4">
+                 <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs text-gray-400">Shadow / Glow</label>
+                    <input 
+                      type="checkbox" 
+                      checked={!!selectedElement.shadow?.enabled}
+                      onChange={(e) => toggleShadow(e.target.checked)}
+                    />
+                  </div>
+                  {selectedElement.shadow?.enabled && (
+                    <div className="space-y-2 pl-2 border-l-2 border-[#3e3e42]">
+                       <div className="flex justify-between items-center">
+                          <span className="text-xs text-gray-500">Color</span>
+                          <input 
+                            type="color" 
+                            value={selectedElement.shadow.color}
+                            onChange={(e) => updateShadow({ color: e.target.value })}
+                            className="w-6 h-6 bg-transparent rounded cursor-pointer"
+                          />
+                       </div>
+                       <FilterControl label="Blur" value={selectedElement.shadow.blur} onChange={(v: number) => updateShadow({ blur: v })} max={50} />
+                       <FilterControl label="Offset X" value={selectedElement.shadow.offsetX} onChange={(v: number) => updateShadow({ offsetX: v })} min={-50} max={50} />
+                       <FilterControl label="Offset Y" value={selectedElement.shadow.offsetY} onChange={(v: number) => updateShadow({ offsetY: v })} min={-50} max={50} />
+                    </div>
+                  )}
+              </div>
+
               <FilterControl label="Blur" value={selectedElement.filters?.blur || 0} onChange={(v: number) => updateFilter('blur', v)} max={20} />
               <FilterControl label="Brightness" value={selectedElement.filters?.brightness || 0} onChange={(v: number) => updateFilter('brightness', v)} min={-1} max={1} step={0.1} />
               <FilterControl label="Contrast" value={selectedElement.filters?.contrast || 0} onChange={(v: number) => updateFilter('contrast', v)} min={-100} max={100} />
