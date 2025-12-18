@@ -2,17 +2,50 @@ import React, { useState, useRef, useEffect } from "react";
 import { Stage, Layer, Rect, Circle, Text as KonvaText, Image as KonvaImage, Transformer, Path } from "react-konva";
 import Konva from "konva";
 import useImage from "use-image";
-import { 
-  Type, Image as ImageIcon, Square, Circle as CircleIcon, 
-  Triangle, Star, Palette, Layers, Download, 
-  Settings, Undo, Redo, Trash2, Move, Monitor, Smartphone,
-  Hexagon, Wand2, MousePointer2, BringToFront, SendToBack,
-  Lock, Unlock, GripVertical, Eye, EyeOff, Copy, Group, Ungroup,
-  AlignLeft, AlignCenter, AlignRight, ChevronDown
+import {
+  Type,
+  Image as ImageIcon,
+  Square,
+  Circle as CircleIcon,
+  Star,
+  Palette,
+  Undo,
+  Redo,
+  Trash2,
+  Monitor,
+  Hexagon,
+  MousePointer2,
+  Lock,
+  Unlock,
+  GripVertical,
+  Eye,
+  EyeOff,
+  Group,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  ChevronDown,
+  // Icon picker choices
+  Heart,
+  Check,
+  X,
+  Plus,
+  Minus,
+  ArrowRight,
+  ArrowLeft,
+  ArrowUp,
+  ArrowDown,
+  Smile,
+  Zap,
+  Sparkles,
+  Crown,
+  Flame,
+  Shield,
 } from "lucide-react";
 import { Reorder, useDragControls } from "framer-motion";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TemplateElement, TextElement, ShapeElement, SvgElement, LogoElement, GroupElement, FilterProps, GradientProps, ShadowProps } from "../types/templates";
 import "../styles/template-editor.css";
 
@@ -42,17 +75,21 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   // Tools state
   const [activeTool, setActiveTool] = useState<string>('select');
 
-  // Handle selection
-  const handleSelect = (id: string, multi: boolean = false) => {
-    if (multi) {
-      if (selectedIds.includes(id)) {
-        setSelectedIds(selectedIds.filter(sid => sid !== id));
-      } else {
-        setSelectedIds([...selectedIds, id]);
-      }
-    } else {
-      setSelectedIds([id]);
-    }
+  // Selection
+  // - Canvas click selects a single layer.
+  // - Layers panel checkboxes allow multi-select (no Shift required).
+  const selectSingle = (id: string) => {
+    setSelectedIds([id]);
+    setActiveTool('select');
+  };
+
+  const toggleSelected = (id: string, next?: boolean) => {
+    setSelectedIds((prev) => {
+      const has = prev.includes(id);
+      const shouldSelect = next ?? !has;
+      if (shouldSelect) return has ? prev : [...prev, id];
+      return prev.filter((x) => x !== id);
+    });
     setActiveTool('select');
   };
 
@@ -77,6 +114,72 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     const next = history[historyStep + 1];
     onChange(next);
     setHistoryStep(historyStep + 1);
+  };
+
+  // Lucide icon picker
+  // We only support icons that are composed purely of <path d="..."> nodes.
+  // (If the icon uses <circle>, <line>, etc., we'd need to convert to path.)
+  const LUCIDE_ICON_CHOICES = [
+    { name: 'Heart', Icon: Heart },
+    { name: 'Check', Icon: Check },
+    { name: 'X', Icon: X },
+    { name: 'Plus', Icon: Plus },
+    { name: 'Minus', Icon: Minus },
+    { name: 'ArrowRight', Icon: ArrowRight },
+    { name: 'ArrowLeft', Icon: ArrowLeft },
+    { name: 'ArrowUp', Icon: ArrowUp },
+    { name: 'ArrowDown', Icon: ArrowDown },
+    { name: 'Smile', Icon: Smile },
+    { name: 'Zap', Icon: Zap },
+    { name: 'Star', Icon: Star },
+    { name: 'Sparkles', Icon: Sparkles },
+    { name: 'Crown', Icon: Crown },
+    { name: 'Flame', Icon: Flame },
+    { name: 'Shield', Icon: Shield },
+  ] as const;
+
+  const lucideToPathData = (LucideIcon: any): string | null => {
+    const nodes: Array<[string, Record<string, any>]> | undefined = LucideIcon?.iconNode;
+    if (!Array.isArray(nodes)) return null;
+
+    const pathDs = nodes
+      .filter(([tag]) => tag === 'path')
+      .map(([, attrs]) => String(attrs?.d ?? ''))
+      .filter(Boolean);
+
+    // If the icon includes non-path nodes, we can't represent it as a single Konva Path (yet).
+    const hasNonPath = nodes.some(([tag]) => tag !== 'path');
+    if (hasNonPath) return null;
+
+    if (pathDs.length === 0) return null;
+    return pathDs.join(' ');
+  };
+
+  const addLucideIcon = (LucideIcon: any, name?: string) => {
+    const d = lucideToPathData(LucideIcon);
+    if (!d) {
+      alert('That icon cannot be inserted yet (only icons made of <path> are supported).');
+      return;
+    }
+
+    const newElement: SvgElement = {
+      id: crypto.randomUUID(),
+      name: name ? `Icon: ${name}` : 'Icon',
+      type: 'svg',
+      content: d,
+      x: 200,
+      y: 200,
+      width: 100,
+      height: 100,
+      rotation: 0,
+      zIndex: elements.length,
+      fill: '#111827',
+      stroke: 'transparent',
+      strokeWidth: 0,
+    };
+
+    addToHistory([...elements, newElement]);
+    setSelectedIds([newElement.id]);
   };
 
   // Element Creators
@@ -388,13 +491,73 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   // Effect to attach transformer
   useEffect(() => {
     if (selectedIds.length > 0 && transformerRef.current && stageRef.current) {
-      const nodes = selectedIds.map(id => stageRef.current?.findOne('#' + id)).filter(Boolean);
+      const nodes = selectedIds
+        .map((id) => stageRef.current?.findOne('#' + id))
+        .filter(Boolean);
       transformerRef.current.nodes(nodes as any);
       transformerRef.current.getLayer()?.batchDraw();
     } else {
       transformerRef.current?.nodes([]);
     }
   }, [selectedIds, elements]);
+
+  // Apply transforms in one batch (important for multi-select scaling)
+  const handleTransformerTransformEnd = () => {
+    const tr = transformerRef.current;
+    if (!tr) return;
+
+    const nodes = tr.nodes();
+    if (nodes.length === 0) return;
+
+    const updated = elements.map((el) => {
+      const node = nodes.find((n) => n.id() === el.id);
+      if (!node) return el;
+
+      // For SVG we drive size via scale (width/24), so treat base scale specially.
+      if (el.type === 'svg') {
+        const vb = 24;
+        const baseScaleX = el.width / vb;
+        const baseScaleY = el.height / vb;
+
+        const currentScaleX = node.scaleX();
+        const currentScaleY = node.scaleY();
+
+        const ratioX = baseScaleX === 0 ? 1 : currentScaleX / baseScaleX;
+        const ratioY = baseScaleY === 0 ? 1 : currentScaleY / baseScaleY;
+
+        // Reset node scale back to base so Konva stays stable.
+        node.scaleX(baseScaleX);
+        node.scaleY(baseScaleY);
+
+        return {
+          ...el,
+          x: node.x(),
+          y: node.y(),
+          width: Math.max(5, el.width * ratioX),
+          height: Math.max(5, el.height * ratioY),
+          rotation: node.rotation(),
+        } as any;
+      }
+
+      const scaleX = node.scaleX();
+      const scaleY = node.scaleY();
+
+      // Bake transform into width/height and reset scales.
+      node.scaleX(1);
+      node.scaleY(1);
+
+      return {
+        ...el,
+        x: node.x(),
+        y: node.y(),
+        width: Math.max(5, node.width() * scaleX),
+        height: Math.max(5, node.height() * scaleY),
+        rotation: node.rotation(),
+      } as any;
+    });
+
+    addToHistory(updated);
+  };
 
 
   const selectedElements = elements.filter(e => selectedIds.includes(e.id));
@@ -415,7 +578,32 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
         <ToolButton icon={<Type size={20} />} onClick={addText} label="Text" />
         <ToolButton icon={<Square size={20} />} onClick={() => addShape('rectangle')} label="Rect" />
         <ToolButton icon={<CircleIcon size={20} />} onClick={() => addShape('circle')} label="Circle" />
-        <ToolButton icon={<Star size={20} />} onClick={() => addShape('star')} label="Star" />
+        <Popover>
+          <PopoverTrigger asChild>
+            <div>
+              <ToolButton icon={<Star size={20} />} label="Icons" />
+            </div>
+          </PopoverTrigger>
+          <PopoverContent side="right" align="start" className="w-80 bg-[#252526] border-[#3e3e42] text-white">
+            <div className="text-xs text-gray-300 mb-2">Icons</div>
+            <div className="grid grid-cols-6 gap-2">
+              {LUCIDE_ICON_CHOICES.map(({ name, Icon }) => (
+                <button
+                  key={name}
+                  type="button"
+                  title={name}
+                  onClick={() => addLucideIcon(Icon, name)}
+                  className="h-9 w-9 rounded flex items-center justify-center bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100"
+                >
+                  <Icon size={18} />
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 text-[11px] text-gray-400">
+              Only icons composed of SVG &lt;path&gt; are supported.
+            </div>
+          </PopoverContent>
+        </Popover>
         <ToolButton icon={<Hexagon size={20} />} onClick={addSvg} label="SVG" />
         
         <label className="cursor-pointer">
@@ -461,62 +649,18 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                   draggable: !el.locked,
                   onClick: (e: any) => {
                     e.cancelBubble = true;
-                    handleSelect(el.id, e.evt.shiftKey);
+                    selectSingle(el.id);
                   },
                   onTap: (e: any) => {
                     e.cancelBubble = true;
-                    handleSelect(el.id, false);
+                    selectSingle(el.id);
                   },
                   onDragEnd: (e: any) => {
                     updateElement(el.id, {
                       x: e.target.x(),
-                      y: e.target.y()
+                      y: e.target.y(),
                     });
                   },
-                  onTransformEnd: (e: any) => {
-                    const node = e.target;
-
-                    // For most shapes we reset scale to 1 and bake it into width/height.
-                    // SVG icons are different: we already use scale (width/24) to size the path.
-                    // If we reset to 1, the SVG will break. Instead, compute the transform ratio
-                    // relative to the base scale and bake it into width/height.
-                    if (el.type === 'svg') {
-                      const vb = 24;
-                      const baseScaleX = el.width / vb;
-                      const baseScaleY = el.height / vb;
-
-                      const currentScaleX = node.scaleX();
-                      const currentScaleY = node.scaleY();
-
-                      const ratioX = baseScaleX === 0 ? 1 : currentScaleX / baseScaleX;
-                      const ratioY = baseScaleY === 0 ? 1 : currentScaleY / baseScaleY;
-
-                      // Reset node scale back to base so Konva stays stable, then update state.
-                      node.scaleX(baseScaleX);
-                      node.scaleY(baseScaleY);
-
-                      updateElement(el.id, {
-                        x: node.x(),
-                        y: node.y(),
-                        width: Math.max(5, el.width * ratioX),
-                        height: Math.max(5, el.height * ratioY),
-                        rotation: node.rotation(),
-                      });
-                      return;
-                    }
-
-                    const scaleX = node.scaleX();
-                    const scaleY = node.scaleY();
-                    node.scaleX(1);
-                    node.scaleY(1);
-                    updateElement(el.id, {
-                      x: node.x(),
-                      y: node.y(),
-                      width: Math.max(5, node.width() * scaleX),
-                      height: Math.max(5, node.height() * scaleY),
-                      rotation: node.rotation()
-                    });
-                  }
                 };
 
                 // Filters logic
@@ -666,7 +810,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                 }
                 return null;
               })}
-              <Transformer ref={transformerRef} />
+              <Transformer ref={transformerRef} onTransformEnd={handleTransformerTransformEnd} />
             </Layer>
           </Stage>
         </div>
@@ -713,11 +857,24 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                   <AccordionItem value="item-1" className="border-0">
                     <div
                       className={`flex items-center px-2 py-2 gap-2 ${isSelected ? 'bg-[#3b82f6]/20' : 'hover:bg-[#3e3e42]'}`}
-                      onClick={(e) => handleSelect(el.id, e.shiftKey || e.ctrlKey || e.metaKey)}
+                      onClick={() => selectSingle(el.id)}
                     >
                       <div className="cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-300" onPointerDown={(e) => e.stopPropagation()}>
                         <GripVertical size={14} />
                       </div>
+
+                      <label
+                        className="flex items-center"
+                        onClick={(e) => e.stopPropagation()}
+                        title="Select layer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={(e) => toggleSelected(el.id, e.target.checked)}
+                          className="h-4 w-4 accent-blue-600"
+                        />
+                      </label>
                       
                       <div className="flex-1 text-xs font-medium text-gray-200 truncate flex items-center gap-2">
                         {el.type === 'text' && <Type size={12} className="text-blue-400"/>}
