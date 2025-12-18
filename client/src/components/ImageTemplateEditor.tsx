@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Stage, Layer, Rect, Circle, Text as KonvaText, Image as KonvaImage, Transformer, Group, Path } from "react-konva";
+import { Stage, Layer, Rect, Circle, Text as KonvaText, Image as KonvaImage, Transformer, Path } from "react-konva";
 import Konva from "konva";
 import useImage from "use-image";
 import { 
@@ -8,10 +8,11 @@ import {
   Settings, Undo, Redo, Trash2, Move, Monitor, Smartphone,
   Hexagon, Wand2, MousePointer2, BringToFront, SendToBack,
   Lock, Unlock, GripVertical, Eye, EyeOff, Copy, Group, Ungroup,
-  AlignLeft, AlignCenter, AlignRight, AlignTop, AlignJustify, AlignEndHorizontal
+  AlignLeft, AlignCenter, AlignRight, ChevronDown
 } from "lucide-react";
 import { Reorder, useDragControls } from "framer-motion";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { TemplateElement, TextElement, ShapeElement, SvgElement, LogoElement, GroupElement, FilterProps, GradientProps, ShadowProps } from "../types/templates";
 import "../styles/template-editor.css";
 
@@ -33,6 +34,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   const stageRef = useRef<Konva.Stage>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [openLayerIds, setOpenLayerIds] = useState<string[]>([]);
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
   const [history, setHistory] = useState<TemplateElement[][]>([elements]);
   const [historyStep, setHistoryStep] = useState(0);
@@ -97,7 +99,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       fontWeight: 'bold'
     };
     addToHistory([...elements, newElement]);
-    setSelectedId(newElement.id);
+    setSelectedIds([newElement.id]);
   };
 
   const addShape = (shapeType: 'rectangle' | 'circle' | 'star') => {
@@ -116,7 +118,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       opacity: 1
     };
     addToHistory([...elements, newElement]);
-    setSelectedId(newElement.id);
+    setSelectedIds([newElement.id]);
   };
 
   const addImage = (url: string) => {
@@ -134,7 +136,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       opacity: 1
     };
     addToHistory([...elements, newElement]);
-    setSelectedId(newElement.id);
+    setSelectedIds([newElement.id]);
   };
 
   const addSvg = () => {
@@ -155,7 +157,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       strokeWidth: 0
     };
     addToHistory([...elements, newElement]);
-    setSelectedId(newElement.id);
+    setSelectedIds([newElement.id]);
   };
 
   // Update Attributes
@@ -473,6 +475,36 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                   },
                   onTransformEnd: (e: any) => {
                     const node = e.target;
+
+                    // For most shapes we reset scale to 1 and bake it into width/height.
+                    // SVG icons are different: we already use scale (width/24) to size the path.
+                    // If we reset to 1, the SVG will break. Instead, compute the transform ratio
+                    // relative to the base scale and bake it into width/height.
+                    if (el.type === 'svg') {
+                      const vb = 24;
+                      const baseScaleX = el.width / vb;
+                      const baseScaleY = el.height / vb;
+
+                      const currentScaleX = node.scaleX();
+                      const currentScaleY = node.scaleY();
+
+                      const ratioX = baseScaleX === 0 ? 1 : currentScaleX / baseScaleX;
+                      const ratioY = baseScaleY === 0 ? 1 : currentScaleY / baseScaleY;
+
+                      // Reset node scale back to base so Konva stays stable, then update state.
+                      node.scaleX(baseScaleX);
+                      node.scaleY(baseScaleY);
+
+                      updateElement(el.id, {
+                        x: node.x(),
+                        y: node.y(),
+                        width: Math.max(5, el.width * ratioX),
+                        height: Math.max(5, el.height * ratioY),
+                        rotation: node.rotation(),
+                      });
+                      return;
+                    }
+
                     const scaleX = node.scaleX();
                     const scaleY = node.scaleY();
                     node.scaleX(1);
@@ -499,13 +531,33 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                 // Gradient logic
                 let fillProps: any = {};
                 if ((el.type === 'shape' || el.type === 'text') && (el as any).gradient?.enabled) {
-                   const grad = (el as any).gradient!;
-                   fillProps = {
-                     fillPriority: 'linear-gradient',
-                     fillLinearGradientStartPoint: grad.start,
-                     fillLinearGradientEndPoint: grad.end,
-                     fillLinearGradientColorStops: grad.stops.flatMap((s: any) => [s.offset, s.color])
-                   };
+                  const grad = (el as any).gradient!;
+                  const stops = Array.isArray(grad.stops) ? grad.stops : [];
+                  const colorStops = stops.flatMap((s: any) => [s.offset, s.color]);
+
+                  if (grad.type === 'radial') {
+                    const start = grad.start ?? { x: 0, y: 0 };
+                    const end = grad.end ?? { x: start.x + 1, y: start.y };
+                    const radius = Math.sqrt(
+                      Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2),
+                    );
+
+                    fillProps = {
+                      fillPriority: 'radial-gradient',
+                      fillRadialGradientStartPoint: start,
+                      fillRadialGradientEndPoint: start,
+                      fillRadialGradientStartRadius: 0,
+                      fillRadialGradientEndRadius: Math.max(1, radius),
+                      fillRadialGradientColorStops: colorStops,
+                    };
+                  } else {
+                    fillProps = {
+                      fillPriority: 'linear-gradient',
+                      fillLinearGradientStartPoint: grad.start,
+                      fillLinearGradientEndPoint: grad.end,
+                      fillLinearGradientColorStops: colorStops,
+                    };
+                  }
                 } else if (el.type === 'shape') {
                   fillProps = { fill: (el as ShapeElement).color };
                 } else if (el.type === 'text') {
@@ -598,14 +650,17 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                    );
                 } else if (el.type === 'svg') {
                   const svgEl = el as SvgElement;
+                  // We assume the AI (and our schema rules) use a 24x24 path coordinate system.
+                  // Konva Path doesn't support width/height directly, so we scale.
+                  const vb = 24;
                   return (
-                    <Path 
+                    <Path
                       {...commonProps}
                       data={svgEl.content}
                       {...fillProps}
                       {...shadowProps}
-                      scaleX={el.width / 100} // Rough scaling for path
-                      scaleY={el.height / 100}
+                      scaleX={el.width / vb}
+                      scaleY={el.height / vb}
                     />
                   );
                 }
@@ -636,12 +691,30 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
           <Reorder.Group axis="y" values={elements} onReorder={handleReorder} className="space-y-1">
           {elements.map((el) => {
             const isSelected = selectedIds.includes(el.id);
+            const isOpen = openLayerIds.includes(el.id);
             
             return (
               <Reorder.Item key={el.id} value={el}>
-                <Accordion type="single" collapsible className="w-full bg-[#333336] rounded-md overflow-hidden border border-[#3e3e42]" value={isSelected ? "item-1" : ""}>
+                <Accordion
+                  type="single"
+                  collapsible
+                  className="w-full bg-[#333336] rounded-md overflow-hidden border border-[#3e3e42]"
+                  value={isOpen ? "item-1" : ""}
+                  onValueChange={(v) => {
+                    const nextOpen = v === "item-1";
+                    setOpenLayerIds((prev) => {
+                      if (nextOpen) {
+                        return prev.includes(el.id) ? prev : [...prev, el.id];
+                      }
+                      return prev.filter((id) => id !== el.id);
+                    });
+                  }}
+                >
                   <AccordionItem value="item-1" className="border-0">
-                    <div className={`flex items-center px-2 py-2 gap-2 ${isSelected ? 'bg-[#3b82f6]/20' : 'hover:bg-[#3e3e42]'}`} onClick={() => handleSelect(el.id, true)}>
+                    <div
+                      className={`flex items-center px-2 py-2 gap-2 ${isSelected ? 'bg-[#3b82f6]/20' : 'hover:bg-[#3e3e42]'}`}
+                      onClick={(e) => handleSelect(el.id, e.shiftKey || e.ctrlKey || e.metaKey)}
+                    >
                       <div className="cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-300" onPointerDown={(e) => e.stopPropagation()}>
                         <GripVertical size={14} />
                       </div>
@@ -717,13 +790,197 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                         
                         {(el.type === 'text' || el.type === 'shape') && (
                           <div className="mt-2 pt-2 border-t border-[#3e3e42]">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs text-gray-400">Gradient</span>
-                              <input type="checkbox" checked={!!(el as any).gradient?.enabled} onChange={(e) => {
-                                if (isSelected) toggleGradient(e.target.checked); // Only toggle if selected to avoid confusion? Or just toggle this specific one
-                                else updateElement(el.id, { gradient: e.target.checked ? { enabled: true, type: 'linear', stops: [{offset:0, color:'#000'}, {offset:1, color:'#fff'}], start:{x:0,y:0}, end:{x:0,y:100}} : undefined })
-                              }}/>
-                            </div>
+                            <Collapsible
+                              key={`gradient-${el.id}-${!!(el as any).gradient?.enabled}`}
+                              defaultOpen={!!(el as any).gradient?.enabled}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <label className="flex items-center gap-2 text-xs text-gray-400 select-none">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!(el as any).gradient?.enabled}
+                                    onChange={(e) => {
+                                      const enabled = e.target.checked;
+                                      if (!enabled) {
+                                        updateElement(el.id, { gradient: undefined });
+                                        return;
+                                      }
+
+                                      const current = (el as any).gradient;
+                                      const next = current ?? {
+                                        enabled: true,
+                                        type: 'linear',
+                                        stops: [
+                                          { offset: 0, color: '#000000' },
+                                          { offset: 1, color: '#ffffff' },
+                                        ],
+                                        start: { x: 0, y: 0 },
+                                        end: { x: Math.max(1, el.width), y: 0 },
+                                        rotation: 0,
+                                      };
+                                      updateElement(el.id, { gradient: { ...next, enabled: true } });
+                                    }}
+                                  />
+                                  Gradient
+                                </label>
+
+                                <CollapsibleTrigger asChild>
+                                  <button
+                                    type="button"
+                                    className="p-1 rounded hover:bg-[#3e3e42] text-gray-400"
+                                    title="Toggle gradient options"
+                                  >
+                                    <ChevronDown size={14} />
+                                  </button>
+                                </CollapsibleTrigger>
+                              </div>
+
+                              <CollapsibleContent className="mt-2 space-y-2">
+                                {(() => {
+                                  const grad = (el as any).gradient;
+                                  if (!grad?.enabled) return null;
+
+                                  const stops = Array.isArray(grad.stops) ? grad.stops : [];
+                                  const stop0 = stops[0] ?? { offset: 0, color: '#000000' };
+                                  const stop1 = stops[1] ?? { offset: 1, color: '#ffffff' };
+                                  const rotation = typeof grad.rotation === 'number' ? grad.rotation : 0;
+
+                                  const setGrad = (nextGrad: any) => updateElement(el.id, { gradient: nextGrad });
+                                  const setRotation = (deg: number) => {
+                                    const width = Math.max(1, el.width);
+                                    const height = Math.max(1, el.height);
+                                    const len = Math.max(width, height);
+                                    const cx = width / 2;
+                                    const cy = height / 2;
+                                    const rad = (deg * Math.PI) / 180;
+                                    const dx = Math.cos(rad);
+                                    const dy = Math.sin(rad);
+                                    const start = { x: cx - (dx * len) / 2, y: cy - (dy * len) / 2 };
+                                    const end = { x: cx + (dx * len) / 2, y: cy + (dy * len) / 2 };
+                                    setGrad({ ...grad, rotation: deg, start, end });
+                                  };
+
+                                  const radius = Math.round(
+                                    Math.sqrt(
+                                      Math.pow((grad.end?.x ?? 0) - (grad.start?.x ?? 0), 2) +
+                                      Math.pow((grad.end?.y ?? 0) - (grad.start?.y ?? 0), 2),
+                                    ),
+                                  );
+
+                                  return (
+                                    <>
+                                      <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                          <span className="text-xs text-gray-500 block mb-1">Type</span>
+                                          <select
+                                            value={grad.type || 'linear'}
+                                            onChange={(e) => setGrad({ ...grad, type: e.target.value })}
+                                            className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"
+                                          >
+                                            <option value="linear">Linear</option>
+                                            <option value="radial">Radial</option>
+                                          </select>
+                                        </div>
+                                        <div>
+                                          <span className="text-xs text-gray-500 block mb-1">
+                                            {grad.type === 'radial' ? `Radius: ${radius}px` : `Angle: ${Math.round(rotation)}°`}
+                                          </span>
+                                          <input
+                                            type="range"
+                                            min={0}
+                                            max={grad.type === 'radial' ? 400 : 360}
+                                            value={grad.type === 'radial' ? radius : rotation}
+                                            onChange={(e) => {
+                                              const val = Number(e.target.value);
+                                              if (grad.type === 'radial') {
+                                                // keep start as center; store radius by pushing end point along +X
+                                                const start = grad.start ?? { x: el.width / 2, y: el.height / 2 };
+                                                const end = { x: start.x + val, y: start.y };
+                                                setGrad({ ...grad, start, end });
+                                              } else {
+                                                setRotation(val);
+                                              }
+                                            }}
+                                            className="w-full template-range"
+                                          />
+                                        </div>
+                                      </div>
+
+                                      <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                          <span className="text-xs text-gray-500 block mb-1">Stop 1</span>
+                                          <div className="flex items-center gap-2">
+                                            <input
+                                              type="color"
+                                              value={stop0.color}
+                                              onChange={(e) => {
+                                                const nextStops = [
+                                                  { ...stop0, color: e.target.value },
+                                                  stop1,
+                                                  ...stops.slice(2),
+                                                ];
+                                                setGrad({ ...grad, stops: nextStops });
+                                              }}
+                                              className="h-6 w-8 bg-transparent rounded cursor-pointer"
+                                            />
+                                            <input
+                                              type="number"
+                                              min={0}
+                                              max={1}
+                                              step={0.01}
+                                              value={stop0.offset}
+                                              onChange={(e) => {
+                                                const nextStops = [
+                                                  { ...stop0, offset: Number(e.target.value) },
+                                                  stop1,
+                                                  ...stops.slice(2),
+                                                ];
+                                                setGrad({ ...grad, stops: nextStops });
+                                              }}
+                                              className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"
+                                            />
+                                          </div>
+                                        </div>
+                                        <div>
+                                          <span className="text-xs text-gray-500 block mb-1">Stop 2</span>
+                                          <div className="flex items-center gap-2">
+                                            <input
+                                              type="color"
+                                              value={stop1.color}
+                                              onChange={(e) => {
+                                                const nextStops = [
+                                                  stop0,
+                                                  { ...stop1, color: e.target.value },
+                                                  ...stops.slice(2),
+                                                ];
+                                                setGrad({ ...grad, stops: nextStops });
+                                              }}
+                                              className="h-6 w-8 bg-transparent rounded cursor-pointer"
+                                            />
+                                            <input
+                                              type="number"
+                                              min={0}
+                                              max={1}
+                                              step={0.01}
+                                              value={stop1.offset}
+                                              onChange={(e) => {
+                                                const nextStops = [
+                                                  stop0,
+                                                  { ...stop1, offset: Number(e.target.value) },
+                                                  ...stops.slice(2),
+                                                ];
+                                                setGrad({ ...grad, stops: nextStops });
+                                              }}
+                                              className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"
+                                            />
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </>
+                                  );
+                                })()}
+                              </CollapsibleContent>
+                            </Collapsible>
                           </div>
                         )}
                       </div>
@@ -738,11 +995,117 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                              </div>
                              <input type="range" max="20" value={el.filters?.blur || 0} onChange={(e) => updateElement(el.id, { filters: {...el.filters, blur: Number(e.target.value)} })} className="w-full template-range"/>
                          </div>
-                         <div className="mt-2 pt-2 border-t border-[#3e3e42] flex items-center justify-between">
-                            <span className="text-xs text-gray-400">Shadow</span>
-                             <input type="checkbox" checked={!!el.shadow?.enabled} onChange={(e) => {
-                                updateElement(el.id, { shadow: e.target.value ? { enabled: true, color: '#000', blur: 10, opacity: 0.5, offsetX: 5, offsetY: 5 } : undefined })
-                             }}/>
+                         <div className="mt-2 pt-2 border-t border-[#3e3e42]">
+                           <Collapsible
+                             key={`shadow-${el.id}-${!!el.shadow?.enabled}`}
+                             defaultOpen={!!el.shadow?.enabled}
+                           >
+                             <div className="flex items-center justify-between gap-2">
+                               <label className="flex items-center gap-2 text-xs text-gray-400 select-none">
+                                 <input
+                                   type="checkbox"
+                                   checked={!!el.shadow?.enabled}
+                                   onChange={(e) => {
+                                     const enabled = e.target.checked;
+                                     if (!enabled) {
+                                       updateElement(el.id, { shadow: undefined });
+                                       return;
+                                     }
+
+                                     const current = el.shadow;
+                                     const next = current ?? {
+                                       enabled: true,
+                                       color: '#000000',
+                                       blur: 10,
+                                       opacity: 0.5,
+                                       offsetX: 5,
+                                       offsetY: 5,
+                                     };
+                                     updateElement(el.id, { shadow: { ...next, enabled: true } });
+                                   }}
+                                 />
+                                 Shadow
+                               </label>
+
+                               <CollapsibleTrigger asChild>
+                                 <button
+                                   type="button"
+                                   className="p-1 rounded hover:bg-[#3e3e42] text-gray-400"
+                                   title="Toggle shadow options"
+                                 >
+                                   <ChevronDown size={14} />
+                                 </button>
+                               </CollapsibleTrigger>
+                             </div>
+
+                             <CollapsibleContent className="mt-2 space-y-2">
+                               {el.shadow?.enabled && (
+                                 <>
+                                   <div className="flex items-center gap-2">
+                                     <input
+                                       type="color"
+                                       value={el.shadow.color}
+                                       onChange={(e) => updateElement(el.id, { shadow: { ...el.shadow!, color: e.target.value } })}
+                                       className="h-6 w-8 bg-transparent rounded cursor-pointer"
+                                     />
+                                     <span className="text-xs text-gray-400">Color</span>
+                                   </div>
+
+                                   <div>
+                                     <div className="flex justify-between">
+                                       <span className="text-xs text-gray-400">Blur</span>
+                                       <span className="text-xs text-gray-500">{Math.round(el.shadow.blur)}</span>
+                                     </div>
+                                     <input
+                                       type="range"
+                                       min={0}
+                                       max={50}
+                                       value={el.shadow.blur}
+                                       onChange={(e) => updateElement(el.id, { shadow: { ...el.shadow!, blur: Number(e.target.value) } })}
+                                       className="w-full template-range"
+                                     />
+                                   </div>
+
+                                   <div>
+                                     <div className="flex justify-between">
+                                       <span className="text-xs text-gray-400">Opacity</span>
+                                       <span className="text-xs text-gray-500">{Math.round(el.shadow.opacity * 100)}%</span>
+                                     </div>
+                                     <input
+                                       type="range"
+                                       min={0}
+                                       max={1}
+                                       step={0.05}
+                                       value={el.shadow.opacity}
+                                       onChange={(e) => updateElement(el.id, { shadow: { ...el.shadow!, opacity: Number(e.target.value) } })}
+                                       className="w-full template-range"
+                                     />
+                                   </div>
+
+                                   <div className="grid grid-cols-2 gap-2">
+                                     <div>
+                                       <span className="text-xs text-gray-500 block mb-1">Offset X</span>
+                                       <input
+                                         type="number"
+                                         value={Math.round(el.shadow.offsetX)}
+                                         onChange={(e) => updateElement(el.id, { shadow: { ...el.shadow!, offsetX: Number(e.target.value) } })}
+                                         className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"
+                                       />
+                                     </div>
+                                     <div>
+                                       <span className="text-xs text-gray-500 block mb-1">Offset Y</span>
+                                       <input
+                                         type="number"
+                                         value={Math.round(el.shadow.offsetY)}
+                                         onChange={(e) => updateElement(el.id, { shadow: { ...el.shadow!, offsetY: Number(e.target.value) } })}
+                                         className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"
+                                       />
+                                     </div>
+                                   </div>
+                                 </>
+                               )}
+                             </CollapsibleContent>
+                           </Collapsible>
                          </div>
                       </div>
 
@@ -760,6 +1123,20 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
           })}
           </Reorder.Group>
         </div>
+
+        {/* Global Output View (for AI / JSON requirement) */}
+        <div className="p-4 border-t border-[#3e3e42]">
+          <button
+            onClick={() => {
+              const json = JSON.stringify(elements, null, 2);
+              console.log(json);
+              alert("JSON Structure logged to console (and ready for AI)");
+            }}
+            className="w-full bg-[#3e3e42] hover:bg-[#4e4e52] text-white py-2 rounded text-xs flex items-center justify-center gap-2"
+          >
+            <Monitor size={14} /> View JSON Structure
+          </button>
+        </div>
         
         {/* Footer Actions */}
         <div className="p-4 border-t border-[#3e3e42] bg-[#2d2d30] grid grid-cols-2 gap-2">
@@ -768,24 +1145,6 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
            </button>
            <button onClick={groupElements} className="bg-[#3e3e42] hover:bg-blue-900/30 text-xs py-2 rounded text-gray-300 hover:text-blue-400 flex items-center justify-center gap-1" title="Group Selected">
              <Group size={14} /> Group
-           </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-        {/* Global Output View (for AI / JSON requirement) */}
-        <div className="mt-auto p-4 border-t border-[#3e3e42]">
-           <button 
-             onClick={() => {
-                const json = JSON.stringify(elements, null, 2);
-                console.log(json);
-                alert("JSON Structure logged to console (and ready for AI)");
-             }}
-             className="w-full bg-[#3e3e42] hover:bg-[#4e4e52] text-white py-2 rounded text-xs flex items-center justify-center gap-2"
-           >
-             <Monitor size={14} /> View JSON Structure
            </button>
         </div>
       </div>

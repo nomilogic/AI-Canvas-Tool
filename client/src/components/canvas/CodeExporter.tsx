@@ -1,74 +1,90 @@
 import React from 'react';
-import { CanvasElement } from '../../lib/ai-parser';
+import type { TemplateElement, ShapeElement, TextElement, LogoElement, SvgElement } from '../../types/templates';
 import { Button } from '@/components/ui/button';
 import { Copy, Check } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface CodeExporterProps {
-  elements: CanvasElement[];
+  elements: TemplateElement[];
 }
 
 export const CodeExporter: React.FC<CodeExporterProps> = ({ elements }) => {
   const [copied, setCopied] = React.useState(false);
 
-  const generateReactCode = (els: CanvasElement[], indentLevel = 2): string => {
+  const escapeText = (s: string) => s.replace(/`/g, '\\`');
+
+  const generateReactCode = (els: TemplateElement[], indentLevel = 2): string => {
     const indent = " ".repeat(indentLevel);
-    
-    return els.map(el => {
-      // Determine tag and common classes
-      let tag = 'div';
-      let classes = [];
-      let content = '';
 
-      if (el.type === 'text') {
-        content = el.text || '';
-        classes.push('font-sans');
-      }
+    return els
+      .slice()
+      .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))
+      .map((el) => {
+        const style: string[] = [];
+        style.push(`position: \"absolute\"`);
+        style.push(`left: ${Math.round(el.x)}`);
+        style.push(`top: ${Math.round(el.y)}`);
+        style.push(`width: ${Math.round(el.width)}`);
+        style.push(`height: ${Math.round(el.height)}`);
+        if (el.rotation) style.push(`transform: \"rotate(${Math.round(el.rotation)}deg)\"`);
 
-      // Positioning
-      if (el.layout === 'absolute') {
-        classes.push('absolute');
-        // We'd output inline styles for exact coords in a real app, 
-        // or Tailwind arbitrary values like top-[100px]
-      } else if (el.layout === 'flex' || el.type === 'container') {
-        classes.push('flex');
-        if (el.direction === 'column') classes.push('flex-col');
-        if (el.align === 'center') classes.push('items-center');
-        if (el.align === 'end') classes.push('items-end');
-        if (el.justify === 'center') classes.push('justify-center');
-        if (el.justify === 'between') classes.push('justify-between');
-        if (el.justify === 'end') classes.push('justify-end');
-      }
+        if (el.type === 'shape') {
+          const s = el as ShapeElement;
+          style.push(`backgroundColor: \"${s.color}\"`);
+          if (s.opacity !== undefined) style.push(`opacity: ${s.opacity}`);
+          if (s.shape === 'circle') style.push(`borderRadius: \"9999px\"`);
+          else if (s.borderRadius !== undefined) style.push(`borderRadius: ${Math.round(s.borderRadius)}`);
 
-      // Styling
-      if (el.type === 'circle') classes.push('rounded-full');
-      else if (el.radius) classes.push('rounded-md');
+          return `${indent}<div style={{ ${style.join(', ')} }} />`;
+        }
 
-      // Build style object string for dynamic values (colors, specific sizes)
-      const styleProps = [];
-      if (el.fill) {
-         if (el.type === 'text') styleProps.push(`color: "${el.fill}"`);
-         else styleProps.push(`backgroundColor: "${el.fill}"`);
-      }
-      if (el.width) styleProps.push(`width: "${el.width}"`);
-      if (el.height) styleProps.push(`height: "${el.height}"`);
-      if (el.x !== undefined && el.layout === 'absolute') styleProps.push(`left: ${el.x}`);
-      if (el.y !== undefined && el.layout === 'absolute') styleProps.push(`top: ${el.y}`);
-      if (el.gap) styleProps.push(`gap: ${el.gap}px`);
-      if (el.padding) styleProps.push(`padding: ${el.padding}px`);
-      if (el.fontSize) styleProps.push(`fontSize: ${el.fontSize}px`);
+        if (el.type === 'text') {
+          const t = el as TextElement;
+          style.push(`color: \"${t.color}\"`);
+          style.push(`fontSize: ${Math.round(t.fontSize)}`);
+          style.push(`fontFamily: \"${t.fontFamily || 'Inter'}\"`);
+          style.push(`fontWeight: \"${t.fontWeight}\"`);
+          style.push(`textAlign: \"${t.textAlign}\"`);
+          style.push(`display: \"flex\"`);
+          style.push(`alignItems: \"center\"`);
+          style.push(`justifyContent: \"center\"`);
 
-      const styleString = styleProps.length > 0 ? ` style={{${styleProps.join(', ')}}}` : '';
-      const classString = classes.length > 0 ? ` className="${classes.join(' ')}"` : '';
+          return `${indent}<div style={{ ${style.join(', ')} }}>${escapeText(t.content)}</div>`;
+        }
 
-      // Recursion
-      const childrenCode = el.children ? `\n${generateReactCode(el.children, indentLevel + 2)}\n${indent}` : content;
+        if (el.type === 'image') {
+          const img = el as LogoElement;
+          const imgStyle = [...style];
+          if (img.opacity !== undefined) imgStyle.push(`opacity: ${img.opacity}`);
+          imgStyle.push(`objectFit: \"cover\"`);
+          if (img.borderRadius !== undefined) imgStyle.push(`borderRadius: ${Math.round(img.borderRadius)}`);
+          return `${indent}<img alt=\"\" src=\"${img.src}\" style={{ ${imgStyle.join(', ')} }} />`;
+        }
 
-      return `${indent}<div${classString}${styleString}>${childrenCode}</div>`;
-    }).join('\n');
+        if (el.type === 'svg') {
+          const svg = el as SvgElement;
+          const svgStyle = [...style];
+          if (svg.opacity !== undefined) svgStyle.push(`opacity: ${svg.opacity}`);
+
+          const fill = svg.fill ?? 'currentColor';
+          const stroke = svg.stroke;
+          const strokeWidth = svg.strokeWidth;
+
+          const strokeAttrs = stroke
+            ? ` stroke=\"${stroke}\"${strokeWidth !== undefined ? ` strokeWidth={${strokeWidth}}` : ''}`
+            : '';
+
+          return `${indent}<svg viewBox=\"0 0 100 100\" style={{ ${svgStyle.join(', ')} }}>
+${indent}  <path d=\"${svg.content}\" fill=\"${fill}\"${strokeAttrs} />
+${indent}</svg>`;
+        }
+
+        return `${indent}<!-- Unsupported element type: ${(el as any).type} -->`;
+      })
+      .join('\n');
   };
 
-  const code = `export default function GeneratedLayout() {\n  return (\n    <div className="relative w-full h-full bg-white">\n${generateReactCode(elements)}\n    </div>\n  );\n}`;
+  const code = `export default function GeneratedLayout() {\n  return (\n    <div style={{ position: \"relative\", width: 800, height: 600, backgroundColor: \"#fff\" }}>\n${generateReactCode(elements)}\n    </div>\n  );\n}`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(code);

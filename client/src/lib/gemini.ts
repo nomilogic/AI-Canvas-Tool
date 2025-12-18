@@ -1,151 +1,163 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { CanvasElement } from "./ai-parser";
+import type { TemplateElement } from "../types/templates";
+import { normalizeAiOutput } from "./template-ai";
 
 const SYSTEM_PROMPT = `
-You are an intelligent UI Engine.
-Your goal is to manipulate the JSON state of a design tool based on user commands.
+You are an AI layout engine for a CANVAS-based design tool.
 
-INPUTS:
-1. Current State (JSON Array of elements)
-2. User Command (Natural Language)
+Goal:
+- Update the JSON state (array of elements) based on the user's command.
 
-OUTPUT:
-- Return the COMPLETE NEW JSON STATE (Array of objects).
-- Raw JSON only. No markdown.
+Critical constraints (must follow):
+- Output MUST be a raw JSON ARRAY (no markdown, no explanation).
+- Output schema MUST match TemplateElement[] (see schema below).
+- This tool is ABSOLUTE-POSITION CANVAS. Do NOT use flex/container layout or children nesting.
+- Coordinates are in PIXELS (top-left origin). All elements MUST fit within the canvas.
+- Every element MUST have: id, type, x, y, width, height, zIndex.
+- zIndex must be unique-ish and reflect visual stacking (0..n-1 is fine).
+- Preserve existing element ids. Only generate new ids for brand-new elements.
+- Do NOT remove existing properties unless the user explicitly asks (especially svg fill/stroke/strokeWidth).
 
-JSON SCHEMA:
-type CanvasElement = {
-  id: string; 
-  type: 'rect' | 'circle' | 'text' | 'image' | 'container';
-  
-  // Positioning
-  layout?: 'absolute' | 'flex'; // Default absolute for canvas-like, flex for layouts
-  x?: number; 
-  y?: number; 
-  width?: number | string; // numbers are pixels, strings like "100%" allowed for flex
-  height?: number | string; 
-  
-  // Style
-  fill?: string; // Background color or text color
-  radius?: number; 
-  fontSize?: number;
-  text?: string; 
+Hard bans (do NOT output these):
+- Do NOT output legacy types: "rect", "circle" (top-level type), "container".
+- Do NOT output legacy keys: "layout", "fill", "text".
+- For circles, use: { type: "shape", shape: "circle", color: "..." }.
+- For rectangles, use: { type: "shape", shape: "rectangle", color: "..." }.
+- For text, use: { type: "text", content: "...", color: "..." }.
+
+Allowed element types:
+- text
+- shape
+- image
+- svg
+
+SVG guidance (important):
+- When the user asks for an icon/symbol/object shape like "cup", "pencil", "camera", "home icon", etc, prefer returning an element with type: "svg".
+- The field content MUST be SVG path data for a <path d="..."> (not an entire <svg> document). A single compound path is fine (multiple subpaths like "M...Z M...Z").
+- Use a 24x24 coordinate system for path data (like common icon sets). Keep coordinates roughly within 0..24.
+- Provide fill and/or stroke on the svg element as needed. If using stroke icons, set stroke="#111827" and strokeWidth=2, fill="none".
+
+TemplateElement schema (TypeScript-ish):
+
+TemplateElement = {
+  id: string;
+  name?: string;
+  type: 'text' | 'shape' | 'image' | 'svg';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation?: number;
+  zIndex: number;
+  filters?: { blur?: number; brightness?: number; contrast?: number; ... };
+  shadow?: { enabled: boolean; color: string; blur: number; opacity: number; offsetX: number; offsetY: number };
+  locked?: boolean;
+  visible?: boolean;
+}
+
+TextElement extends TemplateElement:
+{
+  type: 'text';
+  content: string;
+  fontSize: number;
+  fontFamily: string; // use "Inter"
+  color: string;
+  fontWeight: 'normal'|'bold'|'100'|'200'|'300'|'400'|'500'|'600'|'700'|'800'|'900';
+  textAlign: 'left'|'center'|'right';
+  gradient?: { enabled: boolean; type: 'linear'|'radial'; stops: [{offset:number,color:string},{offset:number,color:string}]; start:{x:number,y:number}; end:{x:number,y:number}; rotation?: number };
+}
+
+ShapeElement extends TemplateElement:
+{
+  type: 'shape';
+  shape: 'rectangle' | 'circle' | 'star';
+  color: string;
   opacity?: number;
+  borderRadius?: number;
+  gradient?: (same structure as text.gradient)
+}
 
-  // Flex Container Props (Only if type='container')
-  direction?: 'row' | 'column';
-  gap?: number;
-  align?: 'start' | 'center' | 'end';
-  justify?: 'start' | 'center' | 'end' | 'between';
-  padding?: number;
-  
-  // Nesting
-  children?: CanvasElement[];
-};
+ImageElement extends TemplateElement:
+{
+  type: 'image';
+  src: string; // must be a valid URL string or keep the existing if modifying
+  opacity?: number;
+}
 
-SCENARIO EXAMPLES:
+SvgElement extends TemplateElement:
+{
+  type: 'svg';
+  content: string; // SVG path d attribute ONLY (no <svg> wrapper)
+  fill?: string;
+  stroke?: string;
+  strokeWidth?: number;
+  opacity?: number;
+}
 
-1. "Create a red box" -> Absolute positioning default
-[{"id":"a1","type":"rect","layout":"absolute","x":100,"y":100,"width":100,"height":100,"fill":"red"}]
+Rules of thumb for "website" layouts on a canvas:
+- Use a background rectangle for sections.
+- Place children with consistent padding (e.g. 40px) and spacing (e.g. 12-24px).
+- Use alignment by computing x/y values (do NOT use containers).
+`;
 
-2. "Create a navbar with logo and links" -> Flex container
-[
-  {
-    "id":"nav", "type":"container", "layout":"absolute", "x":0, "y":0, "width":"100%", "height":60, "fill":"#1e293b",
-    "display":"flex", "direction":"row", "align":"center", "justify":"between", "padding":20,
-    "children": [
-       {"id":"logo", "type":"text", "text":"MyBrand", "fill":"white", "fontSize":20},
-       {"id":"links", "type":"container", "layout":"flex", "gap":20, "direction":"row", "children": [
-          {"id":"l1", "type":"text", "text":"Home", "fill":"#cbd5e1"},
-          {"id":"l2", "type":"text", "text":"About", "fill":"#cbd5e1"}
-       ]}
-    ]
-  }
-]
+function extractJsonArray(text: string): string {
+  const cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim();
+  const start = cleaned.indexOf("[");
+  const end = cleaned.lastIndexOf("]");
+  if (start === -1 || end === -1 || end < start) return cleaned;
+  return cleaned.slice(start, end + 1);
+}
 
-3. "Create a 3-column feature section" -> Grid-like Flex
-[
-  {
-    "id":"section", "type":"container", "layout":"absolute", "x":0, "y":100, "width":"100%", "height":400, "fill":"white",
-    "display":"flex", "direction":"column", "align":"center", "justify":"center", "gap":40,
-    "children": [
-       {"id":"h1", "type":"text", "text":"Our Features", "fontSize":32, "fill":"#0f172a"},
-       {
-         "id":"grid", "type":"container", "layout":"flex", "direction":"row", "gap":20, "align":"start", "justify":"center",
-         "children": [
-           {"id":"c1", "type":"container", "layout":"flex", "direction":"column", "padding":20, "fill":"#f1f5f9", "width":200, "height":200, "radius":8, "children": [
-              {"id":"t1", "type":"text", "text":"Fast", "fontSize":18, "fill":"#334155"},
-              {"id":"d1", "type":"text", "text":"We are super fast.", "fontSize":14, "fill":"#64748b"}
-           ]},
-           {"id":"c2", "type":"container", "layout":"flex", "direction":"column", "padding":20, "fill":"#f1f5f9", "width":200, "height":200, "radius":8, "children": [
-              {"id":"t2", "type":"text", "text":"Secure", "fontSize":18, "fill":"#334155"},
-              {"id":"d2", "type":"text", "text":"We are super secure.", "fontSize":14, "fill":"#64748b"}
-           ]},
-           {"id":"c3", "type":"container", "layout":"flex", "direction":"column", "padding":20, "fill":"#f1f5f9", "width":200, "height":200, "radius":8, "children": [
-              {"id":"t3", "type":"text", "text":"Scalable", "fontSize":18, "fill":"#334155"},
-              {"id":"d3", "type":"text", "text":"We scale with you.", "fontSize":14, "fill":"#64748b"}
-           ]}
-         ]
-       }
-    ]
-  }
-]
+function containsLegacySchema(raw: any): boolean {
+  const arr = Array.isArray(raw) ? raw : (raw?.elements ?? raw);
+  const list = Array.isArray(arr) ? arr : [arr];
+  return list.some((x) => {
+    if (!x || typeof x !== "object") return false;
+    const t = (x as any).type;
+    if (t === "rect" || t === "circle" || t === "container") return true;
+    if ("layout" in (x as any)) return true;
+    if ("fill" in (x as any)) return true;
+    if ("text" in (x as any)) return true;
+    if ("children" in (x as any)) return true;
+    return false;
+  });
+}
 
-4. "Change the navbar color to blue" -> Modify existing
-(Finds the container with id='nav' or matching description and updates fill)
+const REPAIR_PROMPT = `
+You returned JSON that does NOT match the required TemplateElement[] schema.
 
-INSTRUCTIONS:
-- For "Canvas" style requests (draw a circle), use layout: 'absolute'.
-- For "Website/UI" style requests (navbar, card, grid), use layout: 'flex' and containers.
-- Use '100%' width for full-width sections.
-- Use nested containers for complex layouts (rows inside columns).
-- Be creative with colors and spacing.
+Task:
+- Rewrite the provided JSON into a valid TemplateElement[] array.
+- Output ONLY a raw JSON array.
+
+Rules:
+- Allowed element types: "text", "shape", "image", "svg".
+- Required keys per element: id, type, x, y, width, height, zIndex.
+- Banned keys: layout, fill, text, children.
+- Banned legacy types: rect, circle (top-level), container.
+- For circles use: { type: "shape", shape: "circle", color: "..." }.
+- For rectangles use: { type: "shape", shape: "rectangle", color: "..." }.
+- For text use: { type: "text", content: "...", color: "...", fontSize, fontFamily:"Inter", fontWeight, textAlign }.
+- For svg icons: if the user specifies a color (e.g. "red pencil"), set stroke or fill to that exact color.
 `;
 
 export async function generateLayout(
   apiKey: string,
   prompt: string,
-  currentElements: CanvasElement[],
-): Promise<CanvasElement[]> {
+  currentElements: TemplateElement[],
+  canvasWidth: number,
+  canvasHeight: number,
+): Promise<TemplateElement[]> {
   const genAI = new GoogleGenerativeAI(apiKey);
 
-  // List of models to try in order
+  // Try a small set of text-capable models. (Avoid embeddings / image-only models.)
   const modelsToTry = [
-    // Latest Generation (Gemini 3.0)
-    // These represent the most advanced models (often accessed via the 'gemini-3.0' alias)
-    "gemini-3.0-flash", // alias "gemini-3.0"
-    "gemini-3.0-pro", // alias "gemini-3.0"
-
-    // Current Stable Generation (Gemini 2.5)
-    // Recommended for general production use cases
     "gemini-2.5-flash",
     "gemini-2.5-pro",
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-flash-image", // Specialized image generation model
-    "gemini-live-2.5-flash-native-audio", // For real-time, bidirectional streaming
-
-    // Aliases that point to the latest stable version of the 2.5 models
-    "gemini-2.5-flash-latest",
-    "gemini-2.5-pro-latest",
-    "gemini-2.5-flash-lite-latest",
-
-    // Previous Generation Stable Models (Gemini 2.0)
-    // Still available but superseded by 2.5 models
     "gemini-2.0-flash-001",
-    "gemini-2.0-flash-lite-001",
-
-    // Specialized Image and Video Models
-    "imagen-3.0-generate-002", // Image generation model
-    "veo-3.1-generate-001", // Video generation model
-
-    // Embedding Models
-    "gemini-embedding-001",
-    "text-embedding-005",
-    "text-embedding-004",
-    "text-multilingual-embedding-002",
   ];
 
-  let lastError = null;
+  let lastError: any = null;
 
   for (const modelName of modelsToTry) {
     try {
@@ -153,36 +165,84 @@ export async function generateLayout(
       const model = genAI.getGenerativeModel({ model: modelName });
 
       const context = `
-      CURRENT JSON STATE:
-      ${JSON.stringify(currentElements, null, 2)}
-      
-      USER COMMAND:
-      "${prompt}"
-      
-      Return the fully updated JSON array:
-      `;
+CANVAS:
+- width: ${canvasWidth}
+- height: ${canvasHeight}
+
+CURRENT JSON STATE:
+${JSON.stringify(currentElements, null, 2)}
+
+USER COMMAND:
+"${prompt}"
+
+Return the fully updated JSON array of TemplateElement objects:
+`;
 
       const result = await model.generateContent([SYSTEM_PROMPT, context]);
 
       const response = result.response;
       const text = response.text();
-      const cleanJson = text
-        .replace(/```json/g, "")
-        .replace(/```/g, "")
-        .trim();
+      const jsonText = extractJsonArray(text);
+      let raw = JSON.parse(jsonText);
 
-      return JSON.parse(cleanJson);
+      // If the model leaked legacy schema, do a single "repair" call to force it into our schema.
+      if (containsLegacySchema(raw)) {
+        const repairContext = `
+CANVAS:
+- width: ${canvasWidth}
+- height: ${canvasHeight}
+
+BAD_JSON (rewrite this):
+${JSON.stringify(raw, null, 2)}
+`;
+
+        const repair = await model.generateContent([REPAIR_PROMPT, repairContext]);
+        const repairText = repair.response.text();
+        const repairedJsonText = extractJsonArray(repairText);
+        raw = JSON.parse(repairedJsonText);
+      }
+
+      // Enforce our layout system (TemplateElement schema + canvas bounds)
+      const normalized = normalizeAiOutput(raw, canvasWidth, canvasHeight);
+
+      // Preserve missing properties from current state (models often drop svg fill/stroke etc.)
+      const prevById = new Map(currentElements.map((e) => [e.id, e]));
+      const merged = normalized.map((next) => {
+        const prev = prevById.get(next.id);
+        if (!prev) return next;
+
+        // Shallow merge with "keep old when new is undefined" semantics
+        const mergedTop: any = { ...prev, ...next };
+        Object.keys(prev as any).forEach((k) => {
+          if ((next as any)[k] === undefined) mergedTop[k] = (prev as any)[k];
+        });
+
+        // Nested objects: keep previous keys when next omits them
+        if (prev.filters && (next as any).filters) mergedTop.filters = { ...prev.filters, ...(next as any).filters };
+        if (prev.shadow && (next as any).shadow) mergedTop.shadow = { ...prev.shadow, ...(next as any).shadow };
+
+        // Gradient lives on text/shape
+        if ((prev as any).gradient && (next as any).gradient) mergedTop.gradient = { ...(prev as any).gradient, ...(next as any).gradient };
+
+        // SVG-specific: preserve fill/stroke/strokeWidth if dropped
+        if (prev.type === 'svg' && next.type === 'svg') {
+          if ((next as any).fill === undefined) mergedTop.fill = (prev as any).fill;
+          if ((next as any).stroke === undefined) mergedTop.stroke = (prev as any).stroke;
+          if ((next as any).strokeWidth === undefined) mergedTop.strokeWidth = (prev as any).strokeWidth;
+          if ((next as any).opacity === undefined) mergedTop.opacity = (prev as any).opacity;
+        }
+
+        return mergedTop;
+      });
+
+      return merged;
     } catch (error: any) {
       console.warn(`Failed with model ${modelName}:`, error);
       lastError = error;
-
-      // If it's a 404, we continue to the next model.
-      // If it's a 403 (Permission/Key), we might as well stop, but trying others doesn't hurt.
       continue;
     }
   }
 
-  // If we get here, all models failed
   console.error("All AI models failed.");
   throw lastError;
 }
@@ -190,7 +250,7 @@ export async function generateLayout(
 export async function testConnection(apiKey: string): Promise<boolean> {
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
     await model.generateContent("Test");
     return true;
   } catch (e) {

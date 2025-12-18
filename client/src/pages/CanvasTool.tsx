@@ -4,6 +4,7 @@ import { CommandBar } from '../components/canvas/CommandBar';
 import { generateLayout } from '../lib/gemini';
 import { ApiKeyModal } from '../components/modals/ApiKeyModal';
 import { TemplateElement } from '../types/templates'; // Updated import
+import { normalizeAiOutput } from '../lib/template-ai';
 import { Layers, Monitor, Code, Sparkles, BrainCircuit, FileJson, FileCode } from 'lucide-react';
 import { CodeExporter } from '../components/canvas/CodeExporter';
 import { Toaster } from '@/components/ui/sonner';
@@ -11,7 +12,6 @@ import { toast } from 'sonner';
 
 export default function CanvasTool() {
   const [elements, setElements] = useState<TemplateElement[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mode, setMode] = useState<'canvas' | 'json' | 'code'>('canvas'); // Removed 'dom' mode as new editor is canvas-first
   const [isProcessing, setIsProcessing] = useState(false);
   // Priority: Local Storage -> Env Var -> Empty
@@ -33,7 +33,8 @@ export default function CanvasTool() {
   const handleJsonUpdate = () => {
     try {
       const parsed = JSON.parse(jsonInput);
-      setElements(parsed);
+      const normalized = normalizeAiOutput(parsed, CANVAS_WIDTH, CANVAS_HEIGHT);
+      setElements(normalized);
       toast.success("Updated from JSON");
     } catch (e) {
       toast.error("Invalid JSON");
@@ -54,13 +55,8 @@ export default function CanvasTool() {
 
     setIsProcessing(true);
     try {
-      // Note: generateLayout returns CanvasElement[], we cast/map it to TemplateElement[]
-      // For this prototype, assuming the AI returns a structure we can use or we need to map it.
-      // Since we changed the editor, the AI might return incompatible types.
-      // For now, let's just log or try to set it.
-      const newElements: any = await generateLayout(apiKey, prompt, elements as any);
-      // Basic mapping if needed, or rely on loose typing for prototype
-      setElements(newElements); 
+      const newElements = await generateLayout(apiKey, prompt, elements, CANVAS_WIDTH, CANVAS_HEIGHT);
+      setElements(newElements);
       toast.success("AI updated the layout");
     } catch (error: any) {
       console.error("Full AI Error:", error);
@@ -146,7 +142,7 @@ export default function CanvasTool() {
             ) : mode === 'code' ? (
               <div className="w-full h-full p-8 flex items-center justify-center">
                  <div className="w-[800px] h-[600px] bg-[#1e1e1e] rounded-lg border border-white/10 shadow-2xl overflow-hidden">
-                    <CodeExporter elements={elements as any} />
+                    <CodeExporter elements={elements} />
                  </div>
               </div>
             ) : (
