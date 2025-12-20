@@ -31,7 +31,7 @@ export interface GradientProps {
 export interface TemplateElement {
   id: string;
   name?: string; // User friendly name
-  type: 'text' | 'logo' | 'shape' | 'svg' | 'image' | 'group';
+  type: 'text' | 'logo' | 'shape' | 'svg' | 'image' | 'group' | 'icon';
   x: number;
   y: number;
   width: number;
@@ -40,6 +40,7 @@ export interface TemplateElement {
   zIndex: number;
   filters?: FilterProps;
   shadow?: ShadowProps;
+  opacity?: number;
   locked?: boolean;
   visible?: boolean;
 }
@@ -77,7 +78,7 @@ export interface LogoElement extends TemplateElement {
 
 export interface ShapeElement extends TemplateElement {
   type: 'shape';
-  shape: 'rectangle' | 'circle' | 'line' | 'star';
+  shape: 'rectangle' | 'circle' | 'line' | 'star' | 'triangle' | 'diamond' | 'pentagon' | 'hexagon' | 'octagon' | 'rounded-rectangle';
   color: string;
   opacity?: number;
   borderRadius?: number;
@@ -93,6 +94,12 @@ export interface SvgElement extends TemplateElement {
   stroke?: string;
   strokeWidth?: number;
   opacity?: number;
+}
+
+export interface IconElement extends TemplateElement {
+  type: 'icon';
+  iconName: string; // Name of the Lucide icon (e.g., "Heart", "Plus", "Star")
+  color?: string;
 }
 
 export interface Template {

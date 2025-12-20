@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { ImageTemplateEditor } from '../components/ImageTemplateEditor';
 import { CommandBar } from '../components/canvas/CommandBar';
-import { generateLayout } from '../lib/gemini';
-import { ApiKeyModal } from '../components/modals/ApiKeyModal';
 import { TemplateElement } from '../types/templates'; // Updated import
 import { normalizeAiOutput } from '../lib/template-ai';
+import AIService from '../lib/ai-service';
+import { getAIConfig } from '../lib/ai-config';
 import { Layers, Monitor, Code, Sparkles, BrainCircuit, FileJson, FileCode } from 'lucide-react';
 import { CodeExporter } from '../components/canvas/CodeExporter';
 import { Toaster } from '@/components/ui/sonner';
@@ -20,8 +20,17 @@ export default function CanvasTool() {
   });
   const [jsonInput, setJsonInput] = useState('');
 
-  const CANVAS_WIDTH = 800;
-  const CANVAS_HEIGHT = 600;
+  // Canvas size comes from the editor (defaults to 16:9 preset).
+  const [canvasSize, setCanvasSize] = useState({ width: 1280, height: 720 });
+
+  // AI generation strategy toggle (persisted).
+  const [aiSchemaMode, setAiSchemaMode] = useState(() => {
+    return localStorage.getItem('ai_schema_mode') === '1';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('ai_schema_mode', aiSchemaMode ? '1' : '0');
+  }, [aiSchemaMode]);
 
   // Sync JSON editor when elements change (unless we are editing)
   useEffect(() => {
@@ -33,7 +42,7 @@ export default function CanvasTool() {
   const handleJsonUpdate = () => {
     try {
       const parsed = JSON.parse(jsonInput);
-      const normalized = normalizeAiOutput(parsed, CANVAS_WIDTH, CANVAS_HEIGHT);
+      const normalized = normalizeAiOutput(parsed, canvasSize.width, canvasSize.height);
       setElements(normalized);
       toast.success("Updated from JSON");
     } catch (e) {
@@ -48,25 +57,34 @@ export default function CanvasTool() {
   };
 
   const handleCommand = async (prompt: string) => {
-    if (!apiKey) {
-      toast.error("Please add your Gemini API Key first (Settings icon)");
-      return;
-    }
+    const config = getAIConfig();
 
     setIsProcessing(true);
     try {
-      const newElements = await generateLayout(apiKey, prompt, elements, CANVAS_WIDTH, CANVAS_HEIGHT);
+      const aiService = new AIService(config);
+      const newElements = await aiService.generateLayout(
+        prompt,
+        elements,
+        canvasSize.width,
+        canvasSize.height,
+        { strategy: aiSchemaMode ? 'schema' : 'full' }
+      );
       setElements(newElements);
-      toast.success("AI updated the layout");
+      toast.success(`AI (${config.provider}) updated the layout`);
     } catch (error: any) {
       console.error("Full AI Error:", error);
       const msg = error?.message || "AI Generation failed";
+      console.log("Error message for matching:", msg);
       if (msg.includes("404")) {
-        toast.error("Model not found (404). Trying a different model...");
-      } else if (msg.includes("403") || msg.includes("key")) {
-        toast.error("Invalid API Key. Please check settings.");
+        toast.error("Model not found (404). Check provider settings.");
+      } else if (msg.includes("PERMISSION_DENIED") || msg.includes("403")) {
+        toast.error("API Key invalid or permission denied. Check Settings ⚙️");
+      } else if (msg.includes("UNAUTHENTICATED")) {
+        toast.error("Invalid API key. Check Settings ⚙️");
+      } else if (msg.includes("ECONNREFUSED")) {
+        toast.error("Cannot connect to Ollama. Is it running?");
       } else {
-        toast.error(`AI Error: ${msg.slice(0, 50)}...`);
+        toast.error(`AI Error: ${msg.slice(0, 80)}...`);
       }
     } finally {
       setIsProcessing(false);
@@ -116,7 +134,6 @@ export default function CanvasTool() {
                     </>
                 )}
             </div>
-            <ApiKeyModal apiKey={apiKey} onSave={handleApiKeySave} />
         </div>
       </header>
 
@@ -150,6 +167,9 @@ export default function CanvasTool() {
                   <ImageTemplateEditor 
                       elements={elements}
                       onChange={setElements}
+                      onCanvasSizeChange={setCanvasSize}
+                      aiSchemaMode={aiSchemaMode}
+                      onAiSchemaModeChange={setAiSchemaMode}
                   />
               </div>
             )}

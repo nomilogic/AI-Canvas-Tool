@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Stage, Layer, Rect, Circle, Text as KonvaText, Image as KonvaImage, Transformer, Path } from "react-konva";
+import { Stage, Layer, Rect, Circle, Text as KonvaText, Image as KonvaImage, Transformer, Path, Star as KonvaStar, Line } from "react-konva";
 import Konva from "konva";
 import useImage from "use-image";
 import {
@@ -7,7 +7,6 @@ import {
   Image as ImageIcon,
   Square,
   Circle as CircleIcon,
-  Star,
   Palette,
   Undo,
   Redo,
@@ -25,6 +24,8 @@ import {
   AlignCenter,
   AlignRight,
   ChevronDown,
+  Hand,
+  Settings,
   // Icon picker choices
   Heart,
   Check,
@@ -41,12 +42,14 @@ import {
   Crown,
   Flame,
   Shield,
+  Star,
 } from "lucide-react";
 import { Reorder, useDragControls } from "framer-motion";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { TemplateElement, TextElement, ShapeElement, SvgElement, LogoElement, GroupElement, FilterProps, GradientProps, ShadowProps } from "../types/templates";
+import { TemplateElement, TextElement, ShapeElement, SvgElement, LogoElement, GroupElement, IconElement, FilterProps, GradientProps, ShadowProps } from "../types/templates";
+import AIModelSelector from "./AIModelSelector";
 import "../styles/template-editor.css";
 
 // URLImage Component for loading images
@@ -55,20 +58,158 @@ const URLImage = ({ src, ...props }: any) => {
   return <KonvaImage image={image} {...props} />;
 };
 
+// Icon map for rendering Lucide icons
+const ICON_MAP: Record<string, React.ComponentType<any>> = {
+  Heart, Check, X, Plus, Minus, ArrowRight, ArrowLeft, ArrowUp, ArrowDown,
+  Smile, Zap, Sparkles, Crown, Flame, Shield, Star,
+};
+
+// Emoji mapping for icons
+const ICON_EMOJI: Record<string, string> = {
+  'Plus': '➕',
+  'Minus': '➖',
+  'X': '❌',
+  'Check': '✅',
+  'Heart': '❤️',
+  'Star': '⭐',
+  'Smile': '😊',
+  'ArrowRight': '➡️',
+  'ArrowLeft': '⬅️',
+  'ArrowUp': '⬆️',
+  'ArrowDown': '⬇️',
+  'Zap': '⚡',
+  'Sparkles': '✨',
+  'Crown': '👑',
+  'Flame': '🔥',
+  'Shield': '🛡️',
+  'Bell': '🔔',
+  'Settings': '⚙️',
+  'Search': '🔍',
+  'Edit': '✏️',
+  'Trash': '🗑️',
+  'Save': '💾',
+  'Home': '🏠',
+  'Lock': '🔒',
+  'Unlock': '🔓',
+  'Eye': '👁️',
+  'Mail': '📧',
+  'Phone': '☎️',
+  'Link': '🔗',
+  'Share': '📤',
+  'Thumbs': '👍',
+  'Comment': '💬',
+  'Menu': '☰',
+  'Warning': '⚠️',
+  'Info': 'ℹ️',
+  'Folder': '📁',
+  'File': '📄',
+  'Calendar': '📅',
+  'Clock': '🕐',
+  'Download': '⬇️',
+  'Upload': '⬆️',
+  'Checkmark': '✔️',
+  'Expand': '↗️',
+  'Collapse': '↙️',
+  'Refresh': '🔄',
+  'Play': '▶️',
+  'Pause': '⏸️',
+  'Stop': '⏹️',
+  'Volume': '🔊',
+  'Mute': '🔇',
+  'Brightness': '☀️',
+  'Moon': '🌙',
+  'Cloud': '☁️',
+  'Coffee': '☕',
+  'Gift': '🎁',
+  'Target': '🎯',
+  'Fire': '🔥',
+  'Water': '💧',
+  'Bug': '🐛',
+  'Rocket': '🚀',
+  'Key': '🔑',
+  'Certificate': '🏆',
+  'Briefcase': '💼',
+  'Wallet': '👛',
+  'Dice': '🎲',
+};
+
 interface ImageTemplateEditorProps {
   elements: TemplateElement[];
   onChange: (elements: TemplateElement[]) => void;
+  onCanvasSizeChange?: (size: { width: number; height: number }) => void;
+  aiSchemaMode?: boolean;
+  onAiSchemaModeChange?: (next: boolean) => void;
 }
 
 export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({ 
   elements,
-  onChange 
+  onChange,
+  onCanvasSizeChange,
+  aiSchemaMode,
+  onAiSchemaModeChange,
 }) => {
   const stageRef = useRef<Konva.Stage>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
+  const canvasFrameRef = useRef<HTMLDivElement | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [openLayerIds, setOpenLayerIds] = useState<string[]>([]);
-  const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
+  const [iconPopoverOpen, setIconPopoverOpen] = useState(false);
+  const [shapesPopoverOpen, setShapesPopoverOpen] = useState(false);
+  const [openCollapsible, setOpenCollapsible] = useState<string | null>(null);
+
+  // Canvas presets + zoom
+  const CANVAS_PRESETS = {
+    "16:9": { width: 1280, height: 720 },
+    "9:16": { width: 720, height: 1280 },
+    "1:1": { width: 1024, height: 1024 },
+  } as const;
+  type CanvasPresetKey = keyof typeof CANVAS_PRESETS;
+
+  const [canvasPreset, setCanvasPreset] = useState<CanvasPresetKey>("16:9");
+  const [canvasSize, setCanvasSize] = useState<{ width: number; height: number }>(
+    CANVAS_PRESETS["16:9"],
+  );
+  const [zoom, setZoom] = useState<number>(1);
+  const canvasViewportRef = useRef<HTMLDivElement | null>(null);
+
+  const panStateRef = useRef<{
+    isPanning: boolean;
+    startX: number;
+    startY: number;
+    startScrollLeft: number;
+    startScrollTop: number;
+  } | null>(null);
+
+  const clampZoom = (z: number) => Math.min(4, Math.max(0.1, z));
+
+  const fitZoomToViewport = () => {
+    const vp = canvasViewportRef.current;
+    if (!vp) return;
+
+    // Leave some padding so the border/shadow doesn't clip.
+    const padding = 64;
+    const w = Math.max(1, vp.clientWidth - padding);
+    const h = Math.max(1, vp.clientHeight - padding);
+
+    const next = Math.min(w / canvasSize.width, h / canvasSize.height, 1);
+    setZoom(clampZoom(next));
+  };
+
+  useEffect(() => {
+    // When preset changes, update canvas size + refit zoom.
+    setCanvasSize(CANVAS_PRESETS[canvasPreset]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvasPreset]);
+
+  useEffect(() => {
+    fitZoomToViewport();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvasSize.width, canvasSize.height]);
+
+  useEffect(() => {
+    onCanvasSizeChange?.(canvasSize);
+  }, [canvasSize.width, canvasSize.height, onCanvasSizeChange]);
+
   const [history, setHistory] = useState<TemplateElement[][]>([elements]);
   const [historyStep, setHistoryStep] = useState(0);
 
@@ -95,10 +236,12 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
 
   // Add History
   const addToHistory = (newElements: TemplateElement[]) => {
-    const newHistory = history.slice(0, historyStep + 1);
-    newHistory.push(newElements);
-    setHistory(newHistory);
-    setHistoryStep(newHistory.length - 1);
+    setHistory((prev) => {
+      const nextHistory = prev.slice(0, historyStep + 1);
+      nextHistory.push(newElements);
+      return nextHistory;
+    });
+    setHistoryStep((prevStep) => prevStep + 1);
     onChange(newElements); // Propagate change
   };
 
@@ -117,8 +260,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   };
 
   // Lucide icon picker
-  // We only support icons that are composed purely of <path d="..."> nodes.
-  // (If the icon uses <circle>, <line>, etc., we'd need to convert to path.)
+  // Emoji icon choices
   const LUCIDE_ICON_CHOICES = [
     { name: 'Heart', Icon: Heart },
     { name: 'Check', Icon: Check },
@@ -136,29 +278,194 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     { name: 'Crown', Icon: Crown },
     { name: 'Flame', Icon: Flame },
     { name: 'Shield', Icon: Shield },
+    { name: 'Bell', Icon: Heart },
+    { name: 'Settings', Icon: Heart },
+    { name: 'Search', Icon: Heart },
+    { name: 'Edit', Icon: Heart },
+    { name: 'Trash', Icon: Heart },
+    { name: 'Save', Icon: Heart },
+    { name: 'Home', Icon: Heart },
+    { name: 'Lock', Icon: Heart },
+    { name: 'Unlock', Icon: Heart },
+    { name: 'Eye', Icon: Heart },
+    { name: 'Mail', Icon: Heart },
+    { name: 'Phone', Icon: Heart },
+    { name: 'Link', Icon: Heart },
+    { name: 'Share', Icon: Heart },
+    { name: 'Thumbs', Icon: Heart },
+    { name: 'Comment', Icon: Heart },
+    { name: 'Menu', Icon: Heart },
+    { name: 'Warning', Icon: Heart },
+    { name: 'Info', Icon: Heart },
+    { name: 'Folder', Icon: Heart },
+    { name: 'File', Icon: Heart },
+    { name: 'Calendar', Icon: Heart },
+    { name: 'Clock', Icon: Heart },
+    { name: 'Download', Icon: Heart },
+    { name: 'Upload', Icon: Heart },
+    { name: 'Checkmark', Icon: Heart },
+    { name: 'Expand', Icon: Heart },
+    { name: 'Collapse', Icon: Heart },
+    { name: 'Refresh', Icon: Heart },
+    { name: 'Play', Icon: Heart },
+    { name: 'Pause', Icon: Heart },
+    { name: 'Stop', Icon: Heart },
+    { name: 'Volume', Icon: Heart },
+    { name: 'Mute', Icon: Heart },
+    { name: 'Brightness', Icon: Heart },
+    { name: 'Moon', Icon: Heart },
+    { name: 'Cloud', Icon: Heart },
+    { name: 'Coffee', Icon: Heart },
+    { name: 'Gift', Icon: Heart },
+    { name: 'Target', Icon: Heart },
+    { name: 'Fire', Icon: Heart },
+    { name: 'Water', Icon: Heart },
+    { name: 'Bug', Icon: Heart },
+    { name: 'Rocket', Icon: Heart },
+    { name: 'Key', Icon: Heart },
+    { name: 'Certificate', Icon: Heart },
+    { name: 'Briefcase', Icon: Heart },
+    { name: 'Wallet', Icon: Heart },
+    { name: 'Dice', Icon: Heart },
   ] as const;
 
-  const lucideToPathData = (LucideIcon: any): string | null => {
+  const lucideToPathData = (LucideIcon: any, name?: string): string | null => {
+    // Try method 1: Extract from iconNode
     const nodes: Array<[string, Record<string, any>]> | undefined = LucideIcon?.iconNode;
-    if (!Array.isArray(nodes)) return null;
+    if (Array.isArray(nodes) && nodes.length > 0) {
+      const pathDs = nodes
+        .filter(([tag]) => tag === 'path')
+        .map(([, attrs]) => String(attrs?.d ?? ''))
+        .filter(Boolean);
 
-    const pathDs = nodes
-      .filter(([tag]) => tag === 'path')
-      .map(([, attrs]) => String(attrs?.d ?? ''))
-      .filter(Boolean);
+      // If there are path nodes, use them
+      if (pathDs.length > 0) {
+        return pathDs.join(' ');
+      }
 
-    // If the icon includes non-path nodes, we can't represent it as a single Konva Path (yet).
-    const hasNonPath = nodes.some(([tag]) => tag !== 'path');
-    if (hasNonPath) return null;
+      // Fallback: Try to convert circles, lines, etc. to path equivalents
+      const convertedPaths: string[] = [];
+      for (const [tag, attrs] of nodes) {
+        if (tag === 'path') {
+          const d = String(attrs?.d ?? '');
+          if (d) convertedPaths.push(d);
+        } else if (tag === 'circle') {
+          const cx = Number(attrs?.cx ?? 0);
+          const cy = Number(attrs?.cy ?? 0);
+          const r = Number(attrs?.r ?? 0);
+          if (r > 0) {
+            const d = `M ${cx} ${cy} m -${r} 0 a ${r} ${r} 0 1 0 ${r * 2} 0 a ${r} ${r} 0 1 0 -${r * 2} 0`;
+            convertedPaths.push(d);
+          }
+        } else if (tag === 'line') {
+          const x1 = Number(attrs?.x1 ?? 0);
+          const y1 = Number(attrs?.y1 ?? 0);
+          const x2 = Number(attrs?.x2 ?? 0);
+          const y2 = Number(attrs?.y2 ?? 0);
+          const d = `M ${x1} ${y1} L ${x2} ${y2}`;
+          convertedPaths.push(d);
+        } else if (tag === 'rect') {
+          const x = Number(attrs?.x ?? 0);
+          const y = Number(attrs?.y ?? 0);
+          const width = Number(attrs?.width ?? 0);
+          const height = Number(attrs?.height ?? 0);
+          const rx = Number(attrs?.rx ?? 0);
+          if (width > 0 && height > 0) {
+            const d = `M ${x + rx} ${y} h ${width - 2 * rx} a ${rx} ${rx} 0 0 1 ${rx} ${rx} v ${height - 2 * rx} a ${rx} ${rx} 0 0 1 -${rx} ${rx} h -${width - 2 * rx} a ${rx} ${rx} 0 0 1 -${rx} -${rx} v -${height - 2 * rx} a ${rx} ${rx} 0 0 1 ${rx} -${rx}`;
+            convertedPaths.push(d);
+          }
+        } else if (tag === 'polygon') {
+          const points = String(attrs?.points ?? '').split(' ').map(p => p.split(','));
+          if (points.length > 0) {
+            const pathParts = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`);
+            const d = pathParts.join(' ') + ' Z';
+            convertedPaths.push(d);
+          }
+        } else if (tag === 'polyline') {
+          const points = String(attrs?.points ?? '').split(' ').map(p => p.split(','));
+          if (points.length > 0) {
+            const pathParts = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`);
+            const d = pathParts.join(' ');
+            convertedPaths.push(d);
+          }
+        }
+      }
 
-    if (pathDs.length === 0) return null;
-    return pathDs.join(' ');
+      if (convertedPaths.length > 0) {
+        return convertedPaths.join(' ');
+      }
+    }
+
+    // Method 2: Try to render the icon and extract SVG paths from the rendered element
+    try {
+      const svgElement = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svgElement.setAttribute('width', '24');
+      svgElement.setAttribute('height', '24');
+      svgElement.setAttribute('viewBox', '0 0 24 24');
+      svgElement.setAttribute('fill', 'none');
+      svgElement.setAttribute('stroke', 'currentColor');
+      svgElement.setAttribute('stroke-width', '2');
+      svgElement.style.visibility = 'hidden';
+      svgElement.style.position = 'absolute';
+
+      // Render the icon component to get the SVG
+      const container = document.createElement('div');
+      container.style.visibility = 'hidden';
+      container.style.position = 'absolute';
+      document.body.appendChild(container);
+
+      // Create a temporary span to hold the icon
+      const tempSpan = document.createElement('span');
+      container.appendChild(tempSpan);
+
+      // Try to render the icon by creating it
+      try {
+        const icon = new LucideIcon();
+        if (icon && icon.toSvgString) {
+          const svgString = icon.toSvgString();
+          const match = svgString.match(/<path[^>]*d="([^"]*)"[^>]*\/>/g);
+          if (match) {
+            const paths = match
+              .map((m: string) => m.match(/d="([^"]*)"/)?.[1])
+              .filter((p: string | undefined): p is string => typeof p === 'string' && p.length > 0);
+            if (paths.length > 0) {
+              document.body.removeChild(container);
+              return paths.join(' ');
+            }
+          }
+        }
+      } catch (e) {
+        // Fallback failed, continue
+      }
+
+      document.body.removeChild(container);
+    } catch (e) {
+      // If rendering fails, continue to the next method
+    }
+
+    // Method 3: Generate a generic path fallback based on icon name patterns
+    // This is a last resort for common icons
+    const iconPatterns: { [key: string]: string } = {
+      'Plus': 'M12 5v14M5 12h14',
+      'Minus': 'M5 12h14',
+      'X': 'M18 6L6 18M6 6l12 12',
+      'Check': 'M20 6L9 17l-5-5',
+      'Heart': 'M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z',
+      'Star': 'M13 2l3.29 6.71A7 7 0 0 0 20 9h7l-5.65 4.09a7 7 0 0 0 2.3 7.02L13 18l3.29-6.71A7 7 0 0 1 10 9H3l5.65-4.09A7 7 0 0 1 13 2z',
+      'Smile': 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z',
+    };
+
+    if (name && iconPatterns[name]) {
+      return iconPatterns[name];
+    }
+
+    return null;
   };
 
   const addLucideIcon = (LucideIcon: any, name?: string) => {
-    const d = lucideToPathData(LucideIcon);
+    const d = lucideToPathData(LucideIcon, name);
     if (!d) {
-      alert('That icon cannot be inserted yet (only icons made of <path> are supported).');
+      alert(`Icon "${name || 'Unknown'}" is not yet supported. Try Heart, Check, Star, Smile, Plus, Minus, or X.`);
       return;
     }
 
@@ -173,6 +480,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       height: 100,
       rotation: 0,
       zIndex: elements.length,
+      opacity: 1,
       fill: '#111827',
       stroke: 'transparent',
       strokeWidth: 0,
@@ -182,8 +490,35 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     setSelectedIds([newElement.id]);
   };
 
+  const addIcon = (iconName: string) => {
+    if (!ICON_EMOJI[iconName]) {
+      alert(`Icon "${iconName}" not found.`);
+      return;
+    }
+
+    const newElement: IconElement = {
+      id: crypto.randomUUID(),
+      name: `Icon: ${iconName}`,
+      type: 'icon',
+      iconName,
+      color: '#111827',
+      x: 200,
+      y: 200,
+      width: 100,
+      height: 100,
+      rotation: 0,
+      zIndex: elements.length,
+      opacity: 1,
+    };
+
+    addToHistory([...elements, newElement]);
+    setSelectedIds([newElement.id]);
+    setIconPopoverOpen(false);
+  };
+
   // Element Creators
   const addText = () => {
+    console.log('addText');
     const newElement: TextElement = {
       id: crypto.randomUUID(),
       name: 'Text Layer',
@@ -194,6 +529,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       height: 50,
       rotation: 0,
       zIndex: elements.length,
+      opacity: 1,
       content: 'Double click to edit',
       fontSize: 24,
       fontFamily: 'Inter',
@@ -205,7 +541,13 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     setSelectedIds([newElement.id]);
   };
 
-  const addShape = (shapeType: 'rectangle' | 'circle' | 'star') => {
+  const getRandomColor = () => {
+    const colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316'];
+    return colors[Math.floor(Math.random() * colors.length)];
+  };
+
+  const addShape = (shapeType: 'rectangle' | 'circle' | 'star' | 'triangle' | 'diamond' | 'pentagon' | 'hexagon' | 'octagon' | 'rounded-rectangle') => {
+    console.log('addShape', shapeType);
     const newElement: ShapeElement = {
       id: crypto.randomUUID(),
       name: shapeType.charAt(0).toUpperCase() + shapeType.slice(1),
@@ -217,7 +559,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       height: 100,
       rotation: 0,
       zIndex: elements.length,
-      color: '#3b82f6',
+      color: getRandomColor(),
       opacity: 1
     };
     addToHistory([...elements, newElement]);
@@ -255,6 +597,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       height: 100,
       rotation: 0,
       zIndex: elements.length,
+      opacity: 1,
       fill: '#ef4444',
       stroke: '#000000',
       strokeWidth: 0
@@ -282,6 +625,13 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     setSelectedIds([]);
   };
 
+  const deleteLayerById = (id: string) => {
+    const newElements = elements.filter((el) => el.id !== id);
+    addToHistory(newElements);
+    setSelectedIds((prev) => prev.filter((x) => x !== id));
+    setOpenLayerIds((prev) => prev.filter((x) => x !== id));
+  };
+
   // Lock/Unlock Element
   const toggleLock = (id: string) => {
     const el = elements.find(e => e.id === id);
@@ -299,17 +649,20 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   };
 
   // Layer Reorder (Drag & Drop)
-  const handleReorder = (newOrder: TemplateElement[]) => {
-    // Reorder updates the zIndex based on the new array order
-    // But since we store zIndex in the element, we should update that too.
-    // However, for simplicity, let's just assume the array order dictates the rendering order (which it does in map).
-    // And we can normalize zIndex if needed.
-    // Let's just update the state directly first.
-    const reorderedWithZIndex = newOrder.map((el, index) => ({
+  // UI requirement: "top layer" in the Layers panel = front-most on canvas.
+  // Konva renders later items on top, so we keep zIndex increasing back -> front.
+  const handleReorder = (newOrderTopToBottom: TemplateElement[]) => {
+    const n = newOrderTopToBottom.length;
+
+    // First item in the list should get the highest zIndex.
+    const withZ = newOrderTopToBottom.map((el, idx) => ({
       ...el,
-      zIndex: index
+      zIndex: n - 1 - idx,
     }));
-    addToHistory(reorderedWithZIndex);
+
+    // Store sorted back -> front for stable rendering.
+    const sorted = [...withZ].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0));
+    addToHistory(sorted);
   };
   
   // Layer Management
@@ -563,11 +916,93 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   const selectedElements = elements.filter(e => selectedIds.includes(e.id));
   const primarySelection = selectedElements[0]; // For single-value inputs
 
+  // Rendering order (back -> front)
+  const renderElements = React.useMemo(() => {
+    return [...elements].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0));
+  }, [elements]);
+
+  // Layers panel order (top -> bottom, front -> back)
+  const layerListElements = React.useMemo(() => {
+    return [...elements].sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0));
+  }, [elements]);
+
+  const handleViewportWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    // Ctrl+wheel (or trackpad pinch on many browsers) zooms.
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+
+    const vp = canvasViewportRef.current;
+    if (!vp) return;
+
+    const oldZoom = zoom;
+    const direction = e.deltaY > 0 ? -1 : 1;
+    const factor = direction > 0 ? 1.08 : 1 / 1.08;
+    const nextZoom = clampZoom(oldZoom * factor);
+    if (nextZoom === oldZoom) return;
+
+    // Keep the point under the cursor stable by adjusting scroll.
+    const rect = vp.getBoundingClientRect();
+    const offsetX = e.clientX - rect.left;
+    const offsetY = e.clientY - rect.top;
+
+    const scrollLeft = vp.scrollLeft;
+    const scrollTop = vp.scrollTop;
+
+    const nextScrollLeft = (scrollLeft + offsetX) * (nextZoom / oldZoom) - offsetX;
+    const nextScrollTop = (scrollTop + offsetY) * (nextZoom / oldZoom) - offsetY;
+
+    setZoom(nextZoom);
+
+    requestAnimationFrame(() => {
+      vp.scrollLeft = nextScrollLeft;
+      vp.scrollTop = nextScrollTop;
+    });
+  };
+
+  const handleViewportPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (activeTool !== 'hand') return;
+    const vp = canvasViewportRef.current;
+    if (!vp) return;
+
+    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+    panStateRef.current = {
+      isPanning: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startScrollLeft: vp.scrollLeft,
+      startScrollTop: vp.scrollTop,
+    };
+  };
+
+  const handleViewportPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const state = panStateRef.current;
+    if (!state?.isPanning) return;
+    const vp = canvasViewportRef.current;
+    if (!vp) return;
+
+    const dx = e.clientX - state.startX;
+    const dy = e.clientY - state.startY;
+
+    vp.scrollLeft = state.startScrollLeft - dx;
+    vp.scrollTop = state.startScrollTop - dy;
+  };
+
+  const handleViewportPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (activeTool !== 'hand') return;
+    if (!panStateRef.current) return;
+    panStateRef.current = null;
+    try {
+      (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+
   return (
-    <div className="flex h-screen bg-[#1e1e1e] overflow-hidden text-white font-sans">
+    <div className="flex flex-col md:flex-row h-screen bg-[#1e1e1e] overflow-hidden text-white font-sans">
       
-      {/* LEFT TOOLBAR */}
-      <div className="w-16 bg-[#252526] border-r border-[#3e3e42] flex flex-col items-center py-4 gap-4 z-10">
+      {/* LEFT TOOLBAR (mobile: horizontal bottom bar) */}
+      <div className="order-2 md:order-1 w-full md:w-16 bg-[#252526] border-t md:border-t-0 md:border-r border-[#3e3e42] flex flex-row md:flex-col items-center justify-start md:justify-start py-2 md:py-4 px-2 md:px-0 gap-3 md:gap-4 z-10 overflow-x-auto md:overflow-x-visible">
         <div className="mb-4">
           <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
             <Palette className="text-white" size={20} />
@@ -575,32 +1010,130 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
         </div>
 
         <ToolButton icon={<MousePointer2 size={20} />} active={activeTool === 'select'} onClick={() => setActiveTool('select')} label="Select" />
+        <ToolButton icon={<Hand size={20} />} active={activeTool === 'hand'} onClick={() => setActiveTool('hand')} label="Hand" />
         <ToolButton icon={<Type size={20} />} onClick={addText} label="Text" />
-        <ToolButton icon={<Square size={20} />} onClick={() => addShape('rectangle')} label="Rect" />
-        <ToolButton icon={<CircleIcon size={20} />} onClick={() => addShape('circle')} label="Circle" />
-        <Popover>
+        <Popover open={shapesPopoverOpen} onOpenChange={setShapesPopoverOpen}>
+          <PopoverTrigger asChild>
+            <div>
+              <ToolButton icon={<Square size={20} />} label="Shapes" />
+            </div>
+          </PopoverTrigger>
+          <PopoverContent side="right" align="start" className="w-48 bg-[#252526] border-[#3e3e42] text-white p-3 overflow-hidden flex flex-col">
+            <div className="text-xs text-gray-300 mb-2 font-semibold">Shapes</div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => { addShape('rectangle'); setShapesPopoverOpen(false); }}
+                className="h-12 rounded flex items-center justify-center bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100 shrink-0"
+                title="Rectangle"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="4" y="6" width="16" height="12" rx="1"/>
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => { addShape('circle'); setShapesPopoverOpen(false); }}
+                className="h-12 rounded flex items-center justify-center bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100 shrink-0"
+                title="Circle"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                  <circle cx="12" cy="12" r="8"/>
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => { addShape('triangle'); setShapesPopoverOpen(false); }}
+                className="h-12 rounded flex items-center justify-center bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100 shrink-0"
+                title="Triangle"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="12,4 20,18 4,18"/>
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => { addShape('star'); setShapesPopoverOpen(false); }}
+                className="h-12 rounded flex items-center justify-center bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100 shrink-0"
+                title="Star"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="12,2 15,10 23,10 17,15 20,23 12,18 4,23 7,15 1,10 9,10"/>
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => { addShape('diamond'); setShapesPopoverOpen(false); }}
+                className="h-12 rounded flex items-center justify-center bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100 shrink-0"
+                title="Diamond"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="12,2 22,12 12,22 2,12"/>
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => { addShape('pentagon'); setShapesPopoverOpen(false); }}
+                className="h-12 rounded flex items-center justify-center bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100 shrink-0"
+                title="Pentagon"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="12,2 22,9 18,21 6,21 2,9"/>
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => { addShape('hexagon'); setShapesPopoverOpen(false); }}
+                className="h-12 rounded flex items-center justify-center bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100 shrink-0"
+                title="Hexagon"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="20,10 20,14 12,18 4,14 4,10 12,6"/>
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => { addShape('octagon'); setShapesPopoverOpen(false); }}
+                className="h-12 rounded flex items-center justify-center bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100 shrink-0"
+                title="Octagon"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="8,3 16,3 21,8 21,16 16,21 8,21 3,16 3,8"/>
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => { addShape('rounded-rectangle'); setShapesPopoverOpen(false); }}
+                className="h-12 rounded flex items-center justify-center bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100 shrink-0 col-span-2"
+                title="Rounded Rectangle"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="3" y="5" width="18" height="14" rx="3" ry="3"/>
+                </svg>
+              </button>
+            </div>
+          </PopoverContent>
+        </Popover>
+        <Popover open={iconPopoverOpen} onOpenChange={setIconPopoverOpen}>
           <PopoverTrigger asChild>
             <div>
               <ToolButton icon={<Star size={20} />} label="Icons" />
             </div>
           </PopoverTrigger>
-          <PopoverContent side="right" align="start" className="w-80 bg-[#252526] border-[#3e3e42] text-white">
-            <div className="text-xs text-gray-300 mb-2">Icons</div>
-            <div className="grid grid-cols-6 gap-2">
-              {LUCIDE_ICON_CHOICES.map(({ name, Icon }) => (
+          <PopoverContent side="right" align="start" className="w-72 h-44 bg-[#252526] border-[#3e3e42] text-white p-3 overflow-hidden flex flex-col">
+            <div className="text-xs text-gray-300 mb-2 font-semibold">Icons</div>
+            <div className="grid grid-cols-6 gap-2 overflow-y-auto overflow-x-hidden flex-1 pr-2 scrollbar-thin scrollbar-thumb-[#5e5e62] scrollbar-track-transparent [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-500 [&::-webkit-scrollbar-thumb:hover]:bg-gray-400">
+              {LUCIDE_ICON_CHOICES.map(({ name }) => (
                 <button
                   key={name}
                   type="button"
                   title={name}
-                  onClick={() => addLucideIcon(Icon, name)}
-                  className="h-9 w-9 rounded flex items-center justify-center bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100"
+                  onClick={() => addIcon(name)}
+                  className="h-9 w-9 rounded flex items-center justify-center bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100 text-lg shrink-0"
                 >
-                  <Icon size={18} />
+                  {ICON_EMOJI[name] || '❓'}
                 </button>
               ))}
-            </div>
-            <div className="mt-3 text-[11px] text-gray-400">
-              Only icons composed of SVG &lt;path&gt; are supported.
             </div>
           </PopoverContent>
         </Popover>
@@ -613,29 +1146,129 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
           </div>
         </label>
         
-        <div className="flex-1" />
+        <div className="hidden md:block flex-1" />
+
+        <div className="flex flex-col items-center gap-1 px-1">
+          <input
+            type="checkbox"
+            checked={!!aiSchemaMode}
+            disabled={!onAiSchemaModeChange}
+            onChange={(e) => onAiSchemaModeChange?.(e.target.checked)}
+            className="h-4 w-4 accent-violet-500"
+            title="AI schema mode (send element schema + canvas info + prompt; apply actions instead of sending full JSON)"
+          />
+          <div className="text-[10px] leading-none text-gray-300">Schema</div>
+        </div>
         
+        <AIModelSelector />
         <ToolButton icon={<Undo size={20} />} onClick={undo} label="Undo" disabled={historyStep === 0} />
         <ToolButton icon={<Redo size={20} />} onClick={redo} label="Redo" disabled={historyStep === history.length - 1} />
       </div>
 
       {/* CANVAS AREA */}
-      <div className="flex-1 bg-[#1e1e1e] relative overflow-auto flex items-center justify-center p-8">
-        <div className="shadow-2xl border border-[#3e3e42]">
-          <Stage
-            ref={stageRef}
-            width={canvasSize.width}
-            height={canvasSize.height}
-            className="bg-white"
-            onMouseDown={(e) => {
-              const clickedOnEmpty = e.target === e.target.getStage();
-              if (clickedOnEmpty) {
-                setSelectedIds([]);
-              }
-            }}
-          >
+      <div className="order-1 md:order-2 flex-1 bg-[#1e1e1e] relative overflow-hidden flex flex-col p-2 md:p-4 gap-2 md:gap-4 min-h-[45vh] md:min-h-0">
+        {/* Canvas controls */}
+        <div className="flex items-center justify-between gap-3 bg-[#252526] border border-[#3e3e42] rounded-md px-3 py-2">
+          <div className="flex items-center gap-3">
+            <div className="text-xs text-gray-300">Canvas</div>
+            <select
+              value={canvasPreset}
+              onChange={(e) => setCanvasPreset(e.target.value as any)}
+              className="bg-[#3e3e42] text-gray-100 text-xs rounded px-2 py-1"
+              title="Canvas size"
+            >
+              <option value="16:9">16:9 (1280×720)</option>
+              <option value="9:16">9:16 (720×1280)</option>
+              <option value="1:1">1:1 (1024×1024)</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="px-2 py-1 text-xs rounded bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100"
+              onClick={() => setZoom((z) => clampZoom(z / 1.25))}
+              title="Zoom out"
+            >
+              -
+            </button>
+
+            {(() => {
+              const presets = [25, 50, 75, 100, 125, 150, 200, 300];
+              const current = Math.round(zoom * 100);
+              const options = presets.includes(current)
+                ? presets
+                : [...presets, current].sort((a, b) => a - b);
+
+              return (
+                <select
+                  value={current}
+                  onChange={(e) => setZoom(clampZoom(Number(e.target.value) / 100))}
+                  className="bg-[#3e3e42] text-gray-100 text-xs rounded px-2 py-1"
+                  title="Zoom"
+                >
+                  {options.map((pct) => (
+                    <option key={pct} value={pct}>
+                      {pct}%
+                    </option>
+                  ))}
+                </select>
+              );
+            })()}
+
+            <button
+              type="button"
+              className="px-2 py-1 text-xs rounded bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100"
+              onClick={() => setZoom((z) => clampZoom(z * 1.25))}
+              title="Zoom in"
+            >
+              +
+            </button>
+
+            <button
+              type="button"
+              className="px-2 py-1 text-xs rounded bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100"
+              onClick={fitZoomToViewport}
+              title="Fit to view"
+            >
+              Fit
+            </button>
+          </div>
+        </div>
+
+        {/* Scrollable canvas viewport */}
+        <div
+          ref={canvasViewportRef}
+          className={`flex-1 overflow-auto flex items-center justify-center p-3 md:p-6 ${activeTool === 'hand' ? 'cursor-grab' : 'cursor-default'}`}
+          onMouseDown={(e) => {
+            // Clicking the grey area around the canvas should unselect everything.
+            const frame = canvasFrameRef.current;
+            if (!frame) return;
+            if (!frame.contains(e.target as any)) {
+              setSelectedIds([]);
+            }
+          }}
+          onWheel={handleViewportWheel}
+          onPointerDown={handleViewportPointerDown}
+          onPointerMove={handleViewportPointerMove}
+          onPointerUp={handleViewportPointerUp}
+        >
+          <div ref={canvasFrameRef} className="shadow-2xl border border-[#3e3e42] bg-white">
+            <Stage
+              ref={stageRef}
+              width={canvasSize.width * zoom}
+              height={canvasSize.height * zoom}
+              scale={{ x: zoom, y: zoom }}
+              className="bg-white"
+              onMouseDown={(e) => {
+                const clickedOnEmpty = e.target === e.target.getStage();
+                if (clickedOnEmpty) {
+                  setSelectedIds([]);
+                }
+              }}
+            >
             <Layer>
-              {elements.map((el) => {
+              {renderElements.map((el) => {
                 if (el.visible === false) return null;
                 
                 const commonProps = {
@@ -646,7 +1279,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                   width: el.width,
                   height: el.height,
                   rotation: el.rotation || 0,
-                  draggable: !el.locked,
+                  draggable: activeTool === 'select' && !el.locked,
                   onClick: (e: any) => {
                     e.cancelBubble = true;
                     selectSingle(el.id);
@@ -707,10 +1340,12 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                 } else if (el.type === 'text') {
                   fillProps = { fill: (el as TextElement).color };
                 } else if (el.type === 'svg') {
+                  const svgEl = el as SvgElement;
+                  // Provide defaults for SVG properties if not specified
                   fillProps = { 
-                    fill: (el as SvgElement).fill,
-                    stroke: (el as SvgElement).stroke,
-                    strokeWidth: (el as SvgElement).strokeWidth
+                    fill: svgEl.fill || '#111827',
+                    stroke: svgEl.stroke || 'none',
+                    strokeWidth: svgEl.strokeWidth ?? 0
                   };
                 }
 
@@ -735,6 +1370,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                       fontSize={textEl.fontSize}
                       fontFamily={textEl.fontFamily}
                       align={textEl.textAlign}
+                      opacity={el.opacity ?? 1}
                       {...fillProps}
                       {...shadowProps}
                       filters={filters}
@@ -750,23 +1386,98 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                       <Circle
                         {...commonProps}
                         radius={shapeEl.width / 2}
-                        offsetX={-shapeEl.width / 2} // Center adjustment if needed, but Circle uses radius
+                        offsetX={-shapeEl.width / 2}
                         offsetY={-shapeEl.height / 2}
                         {...fillProps}
                         {...shadowProps}
-                        opacity={shapeEl.opacity}
+                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
                         filters={filters}
                       />
                     );
                   } else if (shapeEl.shape === 'star') {
-                    // Konva Star
-                     return (
-                      <Rect // Using Rect as placeholder for simplified logic, or actually use Star
+                    return (
+                      <KonvaStar
                         {...commonProps}
-                        cornerRadius={shapeEl.borderRadius}
+                        numPoints={5}
+                        innerRadius={shapeEl.width / 4}
+                        outerRadius={shapeEl.width / 2}
+                        offsetX={-shapeEl.width / 2}
+                        offsetY={-shapeEl.height / 2}
                         {...fillProps}
                         {...shadowProps}
-                        opacity={shapeEl.opacity}
+                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
+                        filters={filters}
+                      />
+                    );
+                  } else if (shapeEl.shape === 'triangle') {
+                    return (
+                      <Line
+                        {...commonProps}
+                        points={[0, -shapeEl.height / 2, -shapeEl.width / 2, shapeEl.height / 2, shapeEl.width / 2, shapeEl.height / 2, 0, -shapeEl.height / 2]}
+                        closed
+                        {...fillProps}
+                        {...shadowProps}
+                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
+                        filters={filters}
+                      />
+                    );
+                  } else if (shapeEl.shape === 'diamond') {
+                    return (
+                      <Line
+                        {...commonProps}
+                        points={[0, -shapeEl.height / 2, shapeEl.width / 2, 0, 0, shapeEl.height / 2, -shapeEl.width / 2, 0, 0, -shapeEl.height / 2]}
+                        closed
+                        {...fillProps}
+                        {...shadowProps}
+                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
+                        filters={filters}
+                      />
+                    );
+                  } else if (shapeEl.shape === 'pentagon') {
+                    return (
+                      <Line
+                        {...commonProps}
+                        points={[0, -shapeEl.height / 2, shapeEl.width / 2, -shapeEl.height / 6, shapeEl.width / 3, shapeEl.height / 2, -shapeEl.width / 3, shapeEl.height / 2, -shapeEl.width / 2, -shapeEl.height / 6, 0, -shapeEl.height / 2]}
+                        closed
+                        {...fillProps}
+                        {...shadowProps}
+                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
+                        filters={filters}
+                      />
+                    );
+                  } else if (shapeEl.shape === 'hexagon') {
+                    return (
+                      <Line
+                        {...commonProps}
+                        points={[shapeEl.width / 2, 0, shapeEl.width / 4, -shapeEl.height / 2, -shapeEl.width / 4, -shapeEl.height / 2, -shapeEl.width / 2, 0, -shapeEl.width / 4, shapeEl.height / 2, shapeEl.width / 4, shapeEl.height / 2, shapeEl.width / 2, 0]}
+                        closed
+                        {...fillProps}
+                        {...shadowProps}
+                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
+                        filters={filters}
+                      />
+                    );
+                  } else if (shapeEl.shape === 'octagon') {
+                    const offset = shapeEl.width / 3;
+                    return (
+                      <Line
+                        {...commonProps}
+                        points={[offset, -shapeEl.height / 2, -offset, -shapeEl.height / 2, -shapeEl.width / 2, -offset, -shapeEl.width / 2, offset, -offset, shapeEl.height / 2, offset, shapeEl.height / 2, shapeEl.width / 2, offset, shapeEl.width / 2, -offset, offset, -shapeEl.height / 2]}
+                        closed
+                        {...fillProps}
+                        {...shadowProps}
+                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
+                        filters={filters}
+                      />
+                    );
+                  } else if (shapeEl.shape === 'rounded-rectangle') {
+                    return (
+                      <Rect
+                        {...commonProps}
+                        cornerRadius={Math.min(shapeEl.width, shapeEl.height) / 6}
+                        {...fillProps}
+                        {...shadowProps}
+                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
                         filters={filters}
                       />
                     );
@@ -777,7 +1488,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                       cornerRadius={shapeEl.borderRadius}
                       {...fillProps}
                       {...shadowProps}
-                      opacity={shapeEl.opacity}
+                      opacity={el.opacity ?? shapeEl.opacity ?? 1}
                       filters={filters}
                     />
                   );
@@ -787,11 +1498,31 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                      <URLImage 
                         {...commonProps}
                         src={imgEl.src}
-                        opacity={imgEl.opacity}
+                        opacity={el.opacity ?? imgEl.opacity ?? 1}
                         filters={filters}
                         {...shadowProps}
                      />
                    );
+                } else if (el.type === 'icon') {
+                  const iconEl = el as IconElement;
+                  const emoji = ICON_EMOJI[iconEl.iconName] || '❓';
+                  const color = iconEl.color || '#111827';
+                  
+                  return (
+                    <KonvaText
+                      {...commonProps}
+                      text={emoji}
+                      fontSize={Math.min(el.width, el.height) * 0.4}
+                      fontFamily="Arial"
+                      fill={color}
+                      stroke={color}
+                      strokeWidth={0.5}
+                      align="center"
+                      verticalAlign="middle"
+                      opacity={el.opacity ?? 1}
+                      {...shadowProps}
+                    />
+                  );
                 } else if (el.type === 'svg') {
                   const svgEl = el as SvgElement;
                   // We assume the AI (and our schema rules) use a 24x24 path coordinate system.
@@ -801,6 +1532,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                     <Path
                       {...commonProps}
                       data={svgEl.content}
+                      opacity={el.opacity ?? svgEl.opacity ?? 1}
                       {...fillProps}
                       {...shadowProps}
                       scaleX={el.width / vb}
@@ -813,11 +1545,12 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
               <Transformer ref={transformerRef} onTransformEnd={handleTransformerTransformEnd} />
             </Layer>
           </Stage>
+          </div>
         </div>
       </div>
 
-      {/* RIGHT LAYERS & PROPERTIES PANEL */}
-      <div className="w-80 bg-[#252526] border-l border-[#3e3e42] flex flex-col h-full">
+      {/* RIGHT LAYERS & PROPERTIES PANEL (mobile: bottom sheet area) */}
+      <div className="order-3 md:order-3 w-full md:w-80 bg-[#252526] border-t md:border-t-0 md:border-l border-[#3e3e42] flex flex-col md:h-full flex-1 min-h-0">
         <div className="p-4 border-b border-[#3e3e42] flex justify-between items-center bg-[#2d2d30]">
           <h2 className="font-semibold text-sm text-gray-200">Layers</h2>
           <div className="flex gap-2">
@@ -827,13 +1560,13 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-2 space-y-2">
+        <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
           {elements.length === 0 && (
             <div className="text-center text-gray-500 text-sm py-10">No layers added</div>
           )}
           
-          <Reorder.Group axis="y" values={elements} onReorder={handleReorder} className="space-y-1">
-          {elements.map((el) => {
+          <Reorder.Group axis="y" values={layerListElements} onReorder={handleReorder} className="space-y-1">
+          {layerListElements.map((el) => {
             const isSelected = selectedIds.includes(el.id);
             const isOpen = openLayerIds.includes(el.id);
             
@@ -846,12 +1579,11 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                   value={isOpen ? "item-1" : ""}
                   onValueChange={(v) => {
                     const nextOpen = v === "item-1";
-                    setOpenLayerIds((prev) => {
-                      if (nextOpen) {
-                        return prev.includes(el.id) ? prev : [...prev, el.id];
-                      }
-                      return prev.filter((id) => id !== el.id);
-                    });
+                    if (nextOpen) {
+                      setOpenLayerIds([el.id]);
+                    } else {
+                      setOpenLayerIds([]);
+                    }
                   }}
                 >
                   <AccordionItem value="item-1" className="border-0">
@@ -886,6 +1618,13 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                          <button onClick={() => toggleVisibility(el.id)} className={`p-1 rounded hover:bg-[#4e4e52] ${el.visible === false ? 'text-gray-600' : 'text-gray-400'}`}>
                            {el.visible === false ? <EyeOff size={14}/> : <Eye size={14}/>}
+                         </button>
+                         <button
+                           onClick={() => deleteLayerById(el.id)}
+                           className="p-1 rounded hover:bg-red-900/30 text-gray-400 hover:text-red-400"
+                           title="Delete layer"
+                         >
+                           <Trash2 size={14} />
                          </button>
                          <button onClick={() => toggleLock(el.id)} className={`p-1 rounded hover:bg-[#4e4e52] ${el.locked ? 'text-red-400' : 'text-gray-400'}`}>
                            {el.locked ? <Lock size={14}/> : <Unlock size={14}/>}
@@ -925,6 +1664,23 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                       {/* Styles */}
                       <div className="mb-4">
                         <h4 className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-2">Style</h4>
+
+                        {/* Opacity (all layer types) */}
+                        <div className="mb-3">
+                          <div className="flex justify-between">
+                            <span className="text-xs text-gray-400">Opacity</span>
+                            <span className="text-xs text-gray-500">{Math.round(((el.opacity ?? 1) as number) * 100)}%</span>
+                          </div>
+                          <input
+                            type="range"
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            value={el.opacity ?? 1}
+                            onChange={(e) => updateElement(el.id, { opacity: Number(e.target.value) })}
+                            className="w-full template-range"
+                          />
+                        </div>
                         {el.type === 'text' && (
                           <div className="space-y-2">
                             <textarea value={(el as TextElement).content} onChange={(e) => updateElement(el.id, { content: e.target.value })} className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm min-h-[50px]" />
@@ -948,8 +1704,8 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                         {(el.type === 'text' || el.type === 'shape') && (
                           <div className="mt-2 pt-2 border-t border-[#3e3e42]">
                             <Collapsible
-                              key={`gradient-${el.id}-${!!(el as any).gradient?.enabled}`}
-                              defaultOpen={!!(el as any).gradient?.enabled}
+                              open={openCollapsible === `gradient-${el.id}`}
+                              onOpenChange={(isOpen) => setOpenCollapsible(isOpen ? `gradient-${el.id}` : null)}
                             >
                               <div className="flex items-center justify-between gap-2">
                                 <label className="flex items-center gap-2 text-xs text-gray-400 select-none">
@@ -1145,17 +1901,10 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                       {/* Effects */}
                       <div>
                         <h4 className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-2">Effects</h4>
-                         <div className="space-y-2">
-                             <div className="flex justify-between">
-                               <span className="text-xs text-gray-400">Blur</span>
-                               <span className="text-xs text-gray-500">{el.filters?.blur || 0}</span>
-                             </div>
-                             <input type="range" max="20" value={el.filters?.blur || 0} onChange={(e) => updateElement(el.id, { filters: {...el.filters, blur: Number(e.target.value)} })} className="w-full template-range"/>
-                         </div>
                          <div className="mt-2 pt-2 border-t border-[#3e3e42]">
                            <Collapsible
-                             key={`shadow-${el.id}-${!!el.shadow?.enabled}`}
-                             defaultOpen={!!el.shadow?.enabled}
+                             open={openCollapsible === `shadow-${el.id}`}
+                             onOpenChange={(isOpen) => setOpenCollapsible(isOpen ? `shadow-${el.id}` : null)}
                            >
                              <div className="flex items-center justify-between gap-2">
                                <label className="flex items-center gap-2 text-xs text-gray-400 select-none">
@@ -1320,9 +2069,6 @@ const ToolButton = ({ icon, onClick, active, label, disabled }: any) => (
     `}
   >
     {icon}
-    <span className="absolute left-14 bg-black text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
-      {label}
-    </span>
   </button>
 );
 

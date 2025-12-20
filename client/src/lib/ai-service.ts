@@ -1,0 +1,389 @@
+import type { TemplateElement } from "../types/templates";
+import {
+  applyAiActions,
+  type AIGenerationStrategy,
+  type AiActionsResponse,
+} from "./template-ai";
+
+type GenerateLayoutOptions = { strategy?: AIGenerationStrategy };
+
+function extractJsonObject(text: string): string {
+  const cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) return cleaned;
+  return cleaned.slice(start, end + 1);
+}
+
+function summarizeElementsForPrompt(elements: TemplateElement[]): unknown {
+  const MAX_TEXT = 120;
+  const MAX_SVG = 160;
+
+  return elements.map((el) => {
+    const base: any = {
+      id: el.id,
+      type: el.type,
+      name: (el as any).name,
+      x: el.x,
+      y: el.y,
+      width: el.width,
+      height: el.height,
+      rotation: (el as any).rotation ?? 0,
+      zIndex: el.zIndex,
+    };
+
+    if (el.type === "text") {
+      const content = (el as any).content;
+      if (typeof content === "string") base.content = content.slice(0, MAX_TEXT);
+      base.fontSize = (el as any).fontSize;
+      base.color = (el as any).color;
+      base.textAlign = (el as any).textAlign;
+    }
+
+    if (el.type === "shape") {
+      base.shape = (el as any).shape;
+      base.color = (el as any).color;
+    }
+
+    if (el.type === "svg") {
+      const content = (el as any).content;
+      if (typeof content === "string") base.content = content.slice(0, MAX_SVG);
+      base.fill = (el as any).fill;
+      base.stroke = (el as any).stroke;
+    }
+
+    if (el.type === "image") {
+      const src = (el as any).src;
+      base.src = typeof src === "string" ? (src.startsWith("data:image/") ? "__DATA_URI_OMITTED__" : src.slice(0, 120)) : "";
+    }
+
+    if (el.type === "icon") {
+      base.iconName = (el as any).iconName;
+      base.color = (el as any).color;
+    }
+
+    return base;
+  });
+}
+
+const ACTIONS_PROVIDER_SYSTEM_PROMPT = `You are an AI layout engine for a CANVAS-based design tool.
+Return ONLY a raw JSON object: {"actions": [...] }.
+Actions:
+- { op: "create", element: TemplateElement }
+- { op: "update", id: string, patch: Partial<TemplateElement> } // patch only includes changed fields; use null to remove an optional field
+- { op: "delete", id: string }
+Do NOT return a full TemplateElement[] array.`;
+
+export type AIProvider = "gemini" | "ollama" | "huggingface" | "groq";
+
+export interface AIConfig {
+  provider: AIProvider;
+  apiKey?: string;
+  ollamaUrl?: string;
+  huggingfaceModel?: string;
+  groqApiKey?: string;
+}
+
+export interface AIResponse {
+  elements: TemplateElement[];
+  error?: string;
+}
+
+class AIService {
+  private config: AIConfig;
+
+  constructor(config: AIConfig) {
+    this.config = config;
+  }
+
+  async generateLayout(
+    prompt: string,
+    currentElements: TemplateElement[],
+    canvasWidth: number,
+    canvasHeight: number,
+    options?: GenerateLayoutOptions
+  ): Promise<TemplateElement[]> {
+    const systemPrompt = this.getSystemPrompt(prompt);
+
+    switch (this.config.provider) {
+      case "ollama":
+        return this.generateWithOllama(
+          systemPrompt,
+          prompt,
+          currentElements,
+          canvasWidth,
+          canvasHeight,
+          options
+        );
+      case "huggingface":
+        return this.generateWithHuggingFace(
+          systemPrompt,
+          prompt,
+          currentElements,
+          canvasWidth,
+          canvasHeight,
+          options
+        );
+      case "groq":
+        return this.generateWithGroq(
+          systemPrompt,
+          prompt,
+          currentElements,
+          canvasWidth,
+          canvasHeight,
+          options
+        );
+      case "gemini":
+      default:
+        return this.generateWithGemini(
+          this.config.apiKey || "",
+          systemPrompt,
+          prompt,
+          currentElements,
+          canvasWidth,
+          canvasHeight,
+          options
+        );
+    }
+  }
+
+  private getSystemPrompt(userPrompt: string = ""): string {
+    // Don't override - let gemini.ts handle system prompts
+    // This method is kept for backwards compatibility but returns null
+    // so the generateLayout function in gemini.ts uses its own SYSTEM_PROMPT
+    return "";
+  }
+
+  private async generateWithGemini(
+    apiKey: string,
+    systemPrompt: string,
+    userPrompt: string,
+    currentElements: TemplateElement[],
+    canvasWidth: number,
+    canvasHeight: number,
+    options?: GenerateLayoutOptions
+  ): Promise<TemplateElement[]> {
+    if (!apiKey || apiKey.trim() === "") {
+      throw new Error("Gemini API Key is missing. Please add it in Settings ⚙️");
+    }
+    const { generateLayout } = await import("./gemini");
+    // Don't pass systemPrompt - let generateLayout use its own SYSTEM_PROMPT
+    return generateLayout(apiKey, userPrompt, currentElements, canvasWidth, canvasHeight, undefined, options);
+  }
+
+  private async generateWithOllama(
+    systemPrompt: string,
+    userPrompt: string,
+    currentElements: TemplateElement[],
+    canvasWidth: number,
+    canvasHeight: number,
+    options?: GenerateLayoutOptions
+  ): Promise<TemplateElement[]> {
+    const ollamaUrl = this.config.ollamaUrl || "http://localhost:11434";
+    const model = "mistral"; // or "llama2"
+
+    const strategy: AIGenerationStrategy = options?.strategy ?? "full";
+
+    const messages =
+      strategy === "schema"
+        ? [
+            { role: "system", content: ACTIONS_PROVIDER_SYSTEM_PROMPT },
+            {
+              role: "user",
+              content: `Canvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(
+                summarizeElementsForPrompt(currentElements)
+              )}\n\nCommand: ${userPrompt}`,
+            },
+          ]
+        : [
+            { role: "system", content: systemPrompt },
+            {
+              role: "user",
+              content: `Canvas: ${canvasWidth}x${canvasHeight}\nCurrent elements: ${JSON.stringify(
+                currentElements
+              )}\n\nCommand: ${userPrompt}`,
+            },
+          ];
+
+    try {
+      const response = await fetch(`${ollamaUrl}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, messages, stream: false }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Ollama API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const content = data.message.content;
+
+      if (strategy === "schema") {
+        const obj = JSON.parse(extractJsonObject(content)) as AiActionsResponse;
+        const actions = Array.isArray((obj as any)?.actions) ? (obj as any).actions : [];
+        return applyAiActions(currentElements, actions, canvasWidth, canvasHeight, userPrompt);
+      }
+
+      // Extract JSON from response
+      const jsonMatch = content.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+      }
+
+      return currentElements;
+    } catch (error) {
+      console.error("Ollama generation error:", error);
+      return currentElements;
+    }
+  }
+
+  private async generateWithHuggingFace(
+    systemPrompt: string,
+    userPrompt: string,
+    currentElements: TemplateElement[],
+    canvasWidth: number,
+    canvasHeight: number,
+    options?: GenerateLayoutOptions
+  ): Promise<TemplateElement[]> {
+    const apiKey = this.config.apiKey || "";
+    const model = this.config.huggingfaceModel || "mistralai/Mistral-7B-Instruct-v0.1";
+
+    const strategy: AIGenerationStrategy = options?.strategy ?? "full";
+
+    const messages =
+      strategy === "schema"
+        ? [
+            { role: "system", content: ACTIONS_PROVIDER_SYSTEM_PROMPT },
+            {
+              role: "user",
+              content: `Canvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(
+                summarizeElementsForPrompt(currentElements)
+              )}\n\nCommand: ${userPrompt}`,
+            },
+          ]
+        : [
+            { role: "user", content: systemPrompt },
+            {
+              role: "user",
+              content: `Canvas: ${canvasWidth}x${canvasHeight}\nCurrent elements: ${JSON.stringify(
+                currentElements
+              )}\n\nCommand: ${userPrompt}`,
+            },
+          ];
+
+    try {
+      const response = await fetch(
+        "https://api-inference.huggingface.co/models/" + model,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ inputs: messages }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`HuggingFace API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const content = Array.isArray(data) ? data[0].generated_text : data.generated_text;
+
+      if (strategy === "schema") {
+        const obj = JSON.parse(extractJsonObject(content)) as AiActionsResponse;
+        const actions = Array.isArray((obj as any)?.actions) ? (obj as any).actions : [];
+        return applyAiActions(currentElements, actions, canvasWidth, canvasHeight, userPrompt);
+      }
+
+      // Extract JSON from response
+      const jsonMatch = content.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+      }
+
+      return currentElements;
+    } catch (error) {
+      console.error("HuggingFace generation error:", error);
+      return currentElements;
+    }
+  }
+
+  private async generateWithGroq(
+    systemPrompt: string,
+    userPrompt: string,
+    currentElements: TemplateElement[],
+    canvasWidth: number,
+    canvasHeight: number,
+    options?: GenerateLayoutOptions
+  ): Promise<TemplateElement[]> {
+    const apiKey = this.config.groqApiKey || "";
+
+    const strategy: AIGenerationStrategy = options?.strategy ?? "full";
+
+    const messages =
+      strategy === "schema"
+        ? [
+            { role: "system", content: ACTIONS_PROVIDER_SYSTEM_PROMPT },
+            {
+              role: "user",
+              content: `Canvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(
+                summarizeElementsForPrompt(currentElements)
+              )}\n\nCommand: ${userPrompt}`,
+            },
+          ]
+        : [
+            { role: "system", content: systemPrompt },
+            {
+              role: "user",
+              content: `Canvas: ${canvasWidth}x${canvasHeight}\nCurrent elements: ${JSON.stringify(
+                currentElements
+              )}\n\nCommand: ${userPrompt}`,
+            },
+          ];
+
+    try {
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "mixtral-8x7b-32768",
+          messages,
+          temperature: 0.3,
+          max_tokens: 2048,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Groq API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const content = data.choices[0].message.content;
+
+      if (strategy === "schema") {
+        const obj = JSON.parse(extractJsonObject(content)) as AiActionsResponse;
+        const actions = Array.isArray((obj as any)?.actions) ? (obj as any).actions : [];
+        return applyAiActions(currentElements, actions, canvasWidth, canvasHeight, userPrompt);
+      }
+
+      // Extract JSON from response
+      const jsonMatch = content.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+      }
+
+      return currentElements;
+    } catch (error) {
+      console.error("Groq generation error:", error);
+      return currentElements;
+    }
+  }
+}
+
+export default AIService;

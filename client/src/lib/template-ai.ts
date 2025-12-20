@@ -72,6 +72,7 @@ const zTemplateBase = z
     zIndex: zNumber.optional(),
     filters: zFilterProps.optional(),
     shadow: zShadowProps.optional(),
+    opacity: zOptionalNumber,
     locked: z.coerce.boolean().optional(),
     visible: z.coerce.boolean().optional(),
   })
@@ -98,7 +99,18 @@ const zText = zTemplateBase.extend({
 
 const zShape = zTemplateBase.extend({
   type: z.literal("shape"),
-  shape: z.enum(["rectangle", "circle", "line", "star"]),
+  shape: z.enum([
+    "rectangle",
+    "circle",
+    "line",
+    "star",
+    "triangle",
+    "diamond",
+    "pentagon",
+    "hexagon",
+    "octagon",
+    "rounded-rectangle",
+  ]),
   color: z.string().default("#3b82f6"),
   opacity: zOptionalNumber,
   borderRadius: zOptionalNumber,
@@ -109,7 +121,8 @@ const zShape = zTemplateBase.extend({
 
 const zLogo = zTemplateBase.extend({
   type: z.enum(["logo", "image"]),
-  src: z.string(),
+  // AI sometimes forgets to include src; we'll fill it with a placeholder later.
+  src: z.string().optional(),
   opacity: zOptionalNumber,
   borderRadius: zOptionalNumber,
   borderColor: z.string().optional(),
@@ -122,6 +135,13 @@ const zSvg = zTemplateBase.extend({
   fill: z.string().optional(),
   stroke: z.string().optional(),
   strokeWidth: zOptionalNumber,
+  opacity: zOptionalNumber,
+});
+
+const zIcon = zTemplateBase.extend({
+  type: z.literal("icon"),
+  iconName: z.string(),
+  color: z.string().optional(),
   opacity: zOptionalNumber,
 });
 
@@ -170,7 +190,45 @@ function coerceSvgContent(item: any): any {
   return item;
 }
 
-const zTemplateElement = z.discriminatedUnion("type", [zText, zShape, zLogo, zSvg]);
+function coerceImageContent(item: any): any {
+  if (!item || typeof item !== "object") return item;
+  if (item.type !== "image" && item.type !== "logo") return item;
+
+  // Normalize type: we treat "logo" as an "image" in the editor.
+  const normalizedType = item.type === "logo" ? "image" : item.type;
+
+  // Common AI variants for the URL field
+  const candidate =
+    item.src ??
+    item.url ??
+    item.imageUrl ??
+    item.imageURL ??
+    item.image ??
+    item.dataUri ??
+    item.dataURI;
+
+  // Base64 variant (sometimes returned without a data: prefix)
+  const base64 = item.base64 ?? item.pngBase64 ?? item.png_base64;
+
+  if (typeof candidate === "string" && candidate.trim().length > 0) {
+    return { ...item, type: normalizedType, src: candidate };
+  }
+
+  if (typeof base64 === "string" && base64.trim().length > 0) {
+    const s = base64.trim();
+    const src = s.startsWith("data:image/") ? s : `data:image/png;base64,${s}`;
+    return { ...item, type: normalizedType, src };
+  }
+
+  // Leave src undefined here; downstream will fill it with a placeholder.
+  return { ...item, type: normalizedType };
+}
+
+function coerceAiItem(item: any): any {
+  return coerceImageContent(coerceSvgContent(item));
+}
+
+const zTemplateElement = z.discriminatedUnion("type", [zText, zShape, zLogo, zSvg, zIcon]);
 
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
@@ -449,6 +507,23 @@ function renumberZIndex(elements: TemplateElement[]) {
   return elements.map((el, idx) => ({ ...el, zIndex: idx }));
 }
 
+function ensureImageSrc(el: TemplateElement): TemplateElement {
+  if (el.type !== "image") return el;
+
+  const src = (el as any).src;
+  if (typeof src === "string" && src.trim().length > 0) return el;
+
+  const w = Math.max(1, Math.round(el.width));
+  const h = Math.max(1, Math.round(el.height));
+  const label = encodeURIComponent((el as any).name ?? "Image");
+
+  return {
+    ...(el as any),
+    // Safe default so the editor always has something renderable.
+    src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
+  };
+}
+
 export function normalizeAiOutput(
   raw: unknown,
   canvasWidth: number,
@@ -473,7 +548,7 @@ export function normalizeAiOutput(
 
   // 2) Keep any already-correct TemplateElements
   arr.forEach((item) => {
-    const maybeCoerced = coerceSvgContent(item);
+    const maybeCoerced = coerceAiItem(item);
     const res = zTemplateElement.safeParse(maybeCoerced);
     if (res.success) out.push(res.data as TemplateElement);
   });
@@ -505,5 +580,124 @@ export function normalizeAiOutput(
   });
 
   // Sort by zIndex to match rendering order, then re-number to keep it clean.
-  return renumberZIndex(deduped.sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0)));
+  const sorted = deduped.sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0));
+  return renumberZIndex(sorted.map(ensureImageSrc));
+}
+
+export type AIGenerationStrategy = "full" | "schema";
+
+export type AiAction =
+  | { op: "create"; element: unknown }
+  | { op: "update"; id: string; patch: Record<string, unknown> }
+  | { op: "delete"; id: string };
+
+export type AiActionsResponse = {
+  actions: AiAction[];
+};
+
+function applyPatchToElement(prev: TemplateElement, patch: Record<string, unknown>): TemplateElement {
+  const next: any = { ...prev };
+
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) {
+      delete next[k];
+      continue;
+    }
+
+    const prevVal = (next as any)[k];
+
+    // Shallow merge nested objects when both are plain objects.
+    if (
+      prevVal &&
+      typeof prevVal === "object" &&
+      !Array.isArray(prevVal) &&
+      v &&
+      typeof v === "object" &&
+      !Array.isArray(v)
+    ) {
+      (next as any)[k] = { ...prevVal, ...(v as any) };
+      continue;
+    }
+
+    (next as any)[k] = v as any;
+  }
+
+  return next as TemplateElement;
+}
+
+/**
+ * Applies an AI "actions" response (create/update/delete) onto the current element list.
+ * This is used for the "schema" strategy where we avoid sending the full element JSON back to the model.
+ */
+export function applyAiActions(
+  currentElements: TemplateElement[],
+  actions: AiAction[],
+  canvasWidth: number,
+  canvasHeight: number,
+  userPrompt?: string,
+): TemplateElement[] {
+  const allowReplaceImage = !!userPrompt && /(replace|change|swap|update)\s+(the\s+)?(image|photo|picture)|new\s+(image|photo|picture)\s+for\s+(this|that)|regenerate\s+(the\s+)?(image|photo|picture)/.test(userPrompt.toLowerCase());
+
+  const deletedIds = new Set<string>();
+  const byId = new Map<string, TemplateElement>(currentElements.map((e) => [e.id, e]));
+
+  let next: TemplateElement[] = [...currentElements];
+
+  for (const action of actions ?? []) {
+    if (!action || typeof action !== "object") continue;
+
+    if ((action as any).op === "delete") {
+      const id = String((action as any).id ?? "");
+      if (!id) continue;
+      deletedIds.add(id);
+      byId.delete(id);
+      next = next.filter((e) => e.id !== id);
+      continue;
+    }
+
+    if ((action as any).op === "update") {
+      const id = String((action as any).id ?? "");
+      if (!id) continue;
+      const prev = byId.get(id);
+      if (!prev) continue;
+
+      const patch = ((action as any).patch ?? {}) as Record<string, unknown>;
+      const candidate = applyPatchToElement(prev, patch);
+
+      // Image src is treated as immutable unless the user explicitly asks to replace/change it.
+      if (prev.type === "image" && candidate.type === "image" && !allowReplaceImage) {
+        const prevSrc = (prev as any).src;
+        if (typeof prevSrc === "string" && prevSrc.trim() !== "") {
+          (candidate as any).src = prevSrc;
+        }
+      }
+
+      byId.set(id, candidate);
+      next = next.map((e) => (e.id === id ? candidate : e));
+      continue;
+    }
+
+    if ((action as any).op === "create") {
+      const element = (action as any).element;
+      if (!element || typeof element !== "object") continue;
+
+      const id = typeof (element as any).id === "string" && (element as any).id.trim() !== ""
+        ? String((element as any).id)
+        : crypto.randomUUID();
+
+      const candidate = { ...(element as any), id } as TemplateElement;
+      byId.set(id, candidate);
+      next.push(candidate);
+      continue;
+    }
+  }
+
+  // Normalize/clamp; if normalization drops an existing (non-deleted) element due to a bad patch,
+  // keep the previous version to avoid data loss.
+  const normalized = normalizeAiOutput(next, canvasWidth, canvasHeight);
+  const normalizedIds = new Set(normalized.map((e) => e.id));
+
+  const preservedInvalid = currentElements.filter((e) => !deletedIds.has(e.id) && !normalizedIds.has(e.id));
+
+  return normalizeAiOutput([...normalized, ...preservedInvalid], canvasWidth, canvasHeight);
 }
