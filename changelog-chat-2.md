@@ -89032,7 +89032,6 @@ Currently the tolerance is set to `35` (moderate). If you see green fringing, in
 If you want, I can also add a “despill” step (reduce green channel on edge pixels) to make the cutout look cleaner.
 
 USER:
-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
 
 AGENT:
 
@@ -175686,7 +175685,7 @@ Currently the tolerance is set to `35` (moderate). If you see green fringing, in
 If you want, I can also add a “despill” step (reduce green channel on edge pixels) to make the cutout look cleaner.
 
 USER:
-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
+
 
 AGENT:
 
@@ -204952,7 +204951,7 @@ index c59f19c..a678448 100644
  SESSION_SECRET="ad7rN0sLgtTwMFKAt9Esqr3KCUQ4tuG7UoBQ1Py1SLVRWOsJICexYbjts93mKUlg0HogiK+N070XmS78RR22Jw=="
  GEMINI_API_KEY="AIzaSyB1xmiy3A3j0uFcArUtfxUaYwjlgQ3uFIw"
  VITE_GEMINI_API_KEY="AIzaSyB1xmiy3A3j0uFcArUtfxUaYwjlgQ3uFIw"
-+HF_API_KEY="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"
++HF_API_KEY=""
 ```
 
 
