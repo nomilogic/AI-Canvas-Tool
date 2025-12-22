@@ -1,9 +1,11 @@
 import type { TemplateElement } from "../types/templates";
 import {
   applyAiActions,
+  normalizeAiOutput,
   type AIGenerationStrategy,
   type AiActionsResponse,
 } from "./template-ai";
+import { normalizeLayoutTree } from "./layout-tree";
 
 type GenerateLayoutOptions = { strategy?: AIGenerationStrategy };
 
@@ -228,7 +230,10 @@ class AIService {
       // Extract JSON from response
       const jsonMatch = content.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
+        const raw = JSON.parse(jsonMatch[0]);
+        const fromTree = normalizeLayoutTree(raw, canvasWidth, canvasHeight);
+        if (fromTree.length > 0) return fromTree;
+        return normalizeAiOutput(raw, canvasWidth, canvasHeight);
       }
 
       return currentElements;
@@ -301,7 +306,10 @@ class AIService {
       // Extract JSON from response
       const jsonMatch = content.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
+        const raw = JSON.parse(jsonMatch[0]);
+        const fromTree = normalizeLayoutTree(raw, canvasWidth, canvasHeight);
+        if (fromTree.length > 0) return fromTree;
+        return normalizeAiOutput(raw, canvasWidth, canvasHeight);
       }
 
       return currentElements;
@@ -375,7 +383,10 @@ class AIService {
       // Extract JSON from response
       const jsonMatch = content.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
+        const raw = JSON.parse(jsonMatch[0]);
+        const fromTree = normalizeLayoutTree(raw, canvasWidth, canvasHeight);
+        if (fromTree.length > 0) return fromTree;
+        return normalizeAiOutput(raw, canvasWidth, canvasHeight);
       }
 
       return currentElements;

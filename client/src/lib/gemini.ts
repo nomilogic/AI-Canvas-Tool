@@ -6,6 +6,7 @@ import {
   type AIGenerationStrategy,
   type AiActionsResponse,
 } from "./template-ai";
+import { normalizeLayoutTree } from "./layout-tree";
 
 // Alternate strategy: the model returns actions (create/update/delete) rather than a full element array.
 // This allows us to avoid sending the full element JSON back to the model for every prompt.
@@ -887,9 +888,14 @@ Return the fully updated JSON array of TemplateElement objects (ensuring ALL ele
       const jsonText = extractJsonArray(text);
       let raw = JSON.parse(jsonText);
 
-      // If the model leaked legacy schema, do a single "repair" call to force it into our schema.
-      if (containsLegacySchema(raw)) {
-        const repairContext = `
+      // First, try to interpret the response as a nested absolute layout tree (groups + children).
+      // If that fails, fall back to the flat TemplateElement[] / legacy normalization pipeline.
+      let normalized: TemplateElement[] = normalizeLayoutTree(raw, canvasWidth, canvasHeight);
+
+      if (normalized.length === 0) {
+        // If the model leaked legacy schema, do a single "repair" call to force it into our schema.
+        if (containsLegacySchema(raw)) {
+          const repairContext = `
 CANVAS DIMENSIONS (STRICT - ALL ELEMENTS MUST FIT):
 - width: ${canvasWidth} pixels
 - height: ${canvasHeight} pixels
@@ -904,14 +910,15 @@ BAD_JSON (rewrite this to valid TemplateElement[] with proper bounds):
 ${JSON.stringify(sanitizeElementsForPrompt(normalizeAiOutput(raw, canvasWidth, canvasHeight)), null, 2)}
 `;
 
-        const repair = await model.generateContent([REPAIR_PROMPT, repairContext]);
-        const repairText = repair.response.text();
-        const repairedJsonText = extractJsonArray(repairText);
-        raw = JSON.parse(repairedJsonText);
-      }
+          const repair = await model.generateContent([REPAIR_PROMPT, repairContext]);
+          const repairText = repair.response.text();
+          const repairedJsonText = extractJsonArray(repairText);
+          raw = JSON.parse(repairedJsonText);
+        }
 
-      // Enforce our layout system (TemplateElement schema + canvas bounds)
-      const normalized = normalizeAiOutput(raw, canvasWidth, canvasHeight);
+        // Enforce our layout system (TemplateElement schema + canvas bounds) for flat / legacy responses.
+        normalized = normalizeAiOutput(raw, canvasWidth, canvasHeight);
+      }
 
       // Preserve missing properties from current state (models often drop svg fill/stroke etc.)
       const prevById = new Map(currentElements.map((e) => [e.id, e]));
