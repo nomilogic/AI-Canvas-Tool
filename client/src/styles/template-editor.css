@@ -47,6 +47,32 @@
   background: #a8a8a8;
 }
 
+/* Slim canvas scrollbar (both axes) used when panning */
+.canvas-scrollbar {
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: rgba(255,255,255,0.35) transparent; /* thumb, track */
+}
+
+.canvas-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.canvas-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.canvas-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.25);
+  border-radius: 999px;
+  border: 2px solid transparent; /* gives a little padding */
+  background-clip: padding-box;
+}
+
+.canvas-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.35);
+}
+
 /* Range slider custom styling */
 input[type="range"].template-range {
   -webkit-appearance: none;

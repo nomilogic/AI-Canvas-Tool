@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Stage, Layer, Rect, Circle, Text as KonvaText, Image as KonvaImage, Transformer, Path, Star as KonvaStar, Line } from "react-konva";
-import Konva from "konva";
-import useImage from "use-image";
+// Switched from Konva canvas to DOM-based absolute positioning with a TransformBox.
+import { TransformBox, DomTransform } from "./dom/TransformBox";
 import {
   Type,
   Image as ImageIcon,
@@ -51,12 +50,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { TemplateElement, TextElement, ShapeElement, SvgElement, LogoElement, GroupElement, IconElement, FilterProps, GradientProps, ShadowProps } from "../types/templates";
 import AIModelSelector from "./AIModelSelector";
 import "../styles/template-editor.css";
-
-// URLImage Component for loading images
-const URLImage = ({ src, ...props }: any) => {
-  const [image] = useImage(src, 'anonymous');
-  return <KonvaImage image={image} {...props} />;
-};
 
 // Icon map for rendering Lucide icons
 const ICON_MAP: Record<string, React.ComponentType<any>> = {
@@ -148,8 +141,6 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   aiSchemaMode,
   onAiSchemaModeChange,
 }) => {
-  const stageRef = useRef<Konva.Stage>(null);
-  const transformerRef = useRef<Konva.Transformer>(null);
   const canvasFrameRef = useRef<HTMLDivElement | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [openLayerIds, setOpenLayerIds] = useState<string[]>([]);
@@ -841,78 +832,6 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     }
   };
 
-  // Effect to attach transformer
-  useEffect(() => {
-    if (selectedIds.length > 0 && transformerRef.current && stageRef.current) {
-      const nodes = selectedIds
-        .map((id) => stageRef.current?.findOne('#' + id))
-        .filter(Boolean);
-      transformerRef.current.nodes(nodes as any);
-      transformerRef.current.getLayer()?.batchDraw();
-    } else {
-      transformerRef.current?.nodes([]);
-    }
-  }, [selectedIds, elements]);
-
-  // Apply transforms in one batch (important for multi-select scaling)
-  const handleTransformerTransformEnd = () => {
-    const tr = transformerRef.current;
-    if (!tr) return;
-
-    const nodes = tr.nodes();
-    if (nodes.length === 0) return;
-
-    const updated = elements.map((el) => {
-      const node = nodes.find((n) => n.id() === el.id);
-      if (!node) return el;
-
-      // For SVG we drive size via scale (width/24), so treat base scale specially.
-      if (el.type === 'svg') {
-        const vb = 24;
-        const baseScaleX = el.width / vb;
-        const baseScaleY = el.height / vb;
-
-        const currentScaleX = node.scaleX();
-        const currentScaleY = node.scaleY();
-
-        const ratioX = baseScaleX === 0 ? 1 : currentScaleX / baseScaleX;
-        const ratioY = baseScaleY === 0 ? 1 : currentScaleY / baseScaleY;
-
-        // Reset node scale back to base so Konva stays stable.
-        node.scaleX(baseScaleX);
-        node.scaleY(baseScaleY);
-
-        return {
-          ...el,
-          x: node.x(),
-          y: node.y(),
-          width: Math.max(5, el.width * ratioX),
-          height: Math.max(5, el.height * ratioY),
-          rotation: node.rotation(),
-        } as any;
-      }
-
-      const scaleX = node.scaleX();
-      const scaleY = node.scaleY();
-
-      // Bake transform into width/height and reset scales.
-      node.scaleX(1);
-      node.scaleY(1);
-
-      return {
-        ...el,
-        x: node.x(),
-        y: node.y(),
-        width: Math.max(5, node.width() * scaleX),
-        height: Math.max(5, node.height() * scaleY),
-        rotation: node.rotation(),
-      } as any;
-    });
-
-    addToHistory(updated);
-  };
-
-
   const selectedElements = elements.filter(e => selectedIds.includes(e.id));
   const primarySelection = selectedElements[0]; // For single-value inputs
 
@@ -928,7 +847,15 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
 
   const handleViewportWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     // Ctrl+wheel (or trackpad pinch on many browsers) zooms.
-    if (!e.ctrlKey) return;
+    if (!e.ctrlKey) {
+      // If not in hand (pan) tool, prevent native scrolling to avoid page scroll.
+      if (activeTool !== 'hand') {
+        e.preventDefault();
+        return;
+      }
+      // Otherwise allow normal scrolling when panning.
+      return;
+    }
     e.preventDefault();
 
     const vp = canvasViewportRef.current;
@@ -998,11 +925,21 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     }
   };
 
+  // If the active tool changes away from hand, cancel any ongoing pan state.
+  useEffect(() => {
+    if (activeTool !== 'hand') {
+      panStateRef.current = null;
+    }
+  }, [activeTool]);
+
+  const hasMultiSelection = selectedIds.length > 1;
+
+
   return (
     <div className="flex flex-col md:flex-row h-screen bg-[#1e1e1e] overflow-hidden text-white font-sans">
       
       {/* LEFT TOOLBAR (mobile: horizontal bottom bar) */}
-      <div className="order-2 md:order-1 w-full md:w-16 bg-[#252526] border-t md:border-t-0 md:border-r border-[#3e3e42] flex flex-row md:flex-col items-center justify-start md:justify-start py-2 md:py-4 px-2 md:px-0 gap-3 md:gap-4 z-10 overflow-x-auto md:overflow-x-visible">
+      <div className="order-2 md:order-1 w-full md:w-16 bg-[#252526] border-t md:border-t-0 md:border-r border-[#3e3e42] flex flex-row md:flex-col items-center justify-start md:justify-start py-2 md:py-4 px-2 md:px-0 gap-3 md:gap-4 z-10 overflow-visible">
         <div className="mb-4">
           <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
             <Palette className="text-white" size={20} />
@@ -1239,7 +1176,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
         {/* Scrollable canvas viewport */}
         <div
           ref={canvasViewportRef}
-          className={`flex-1 overflow-auto flex items-center justify-center p-3 md:p-6 ${activeTool === 'hand' ? 'cursor-grab' : 'cursor-default'}`}
+          className={`flex-1 ${activeTool === 'hand' ? 'overflow-auto canvas-scrollbar cursor-grab' : 'overflow-hidden cursor-default'} flex items-center justify-center p-3 md:p-6`}
           onMouseDown={(e) => {
             // Clicking the grey area around the canvas should unselect everything.
             const frame = canvasFrameRef.current;
@@ -1253,298 +1190,234 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
           onPointerMove={handleViewportPointerMove}
           onPointerUp={handleViewportPointerUp}
         >
-          <div ref={canvasFrameRef} className="shadow-2xl border border-[#3e3e42] bg-white">
-            <Stage
-              ref={stageRef}
-              width={canvasSize.width * zoom}
-              height={canvasSize.height * zoom}
-              scale={{ x: zoom, y: zoom }}
-              className="bg-white"
-              onMouseDown={(e) => {
-                const clickedOnEmpty = e.target === e.target.getStage();
-                if (clickedOnEmpty) {
-                  setSelectedIds([]);
-                }
-              }}
-            >
-            <Layer>
-              {renderElements.map((el) => {
-                if (el.visible === false) return null;
-                
-                const commonProps = {
-                  key: el.id,
-                  id: el.id,
-                  x: el.x,
-                  y: el.y,
-                  width: el.width,
-                  height: el.height,
-                  rotation: el.rotation || 0,
-                  draggable: activeTool === 'select' && !el.locked,
-                  onClick: (e: any) => {
-                    e.cancelBubble = true;
-                    selectSingle(el.id);
-                  },
-                  onTap: (e: any) => {
-                    e.cancelBubble = true;
-                    selectSingle(el.id);
-                  },
-                  onDragEnd: (e: any) => {
-                    updateElement(el.id, {
-                      x: e.target.x(),
-                      y: e.target.y(),
-                    });
-                  },
+          <div
+            ref={canvasFrameRef}
+            className="shadow-2xl border border-[#3e3e42] bg-white relative"
+            style={{
+              width: canvasSize.width,
+              height: canvasSize.height,
+              zoom: zoom,
+              boxSizing: "content-box",
+            }}
+          >
+            {renderElements.map((el) => {
+              if (el.visible === false) return null;
+
+              const transform: DomTransform = {
+                id: el.id,
+                x: el.x,
+                y: el.y,
+                width: el.width,
+                height: el.height,
+                rotation: el.rotation || 0,
+              };
+
+              const isSelected = selectedIds.includes(el.id);
+              const showSingleHandles = !hasMultiSelection && isSelected;
+
+              const handleUpdate = (updates: Partial<DomTransform>) => {
+                // Single-element transform updates just that element.
+                updateElement(el.id, {
+                  x: updates.x ?? el.x,
+                  y: updates.y ?? el.y,
+                  width: updates.width ?? el.width,
+                  height: updates.height ?? el.height,
+                  rotation: updates.rotation ?? el.rotation ?? 0,
+                } as any);
+              };
+
+              const baseStyle: React.CSSProperties = {
+                position: "absolute",
+                inset: 0,
+              };
+
+              let content: React.ReactNode = null;
+
+              if (el.type === "text") {
+                const textEl = el as TextElement;
+                content = (
+                  <div
+                    style={{
+                      ...baseStyle,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent:
+                        textEl.textAlign === "left"
+                          ? "flex-start"
+                          : textEl.textAlign === "right"
+                          ? "flex-end"
+                          : "center",
+                      padding: 8,
+                      fontFamily: textEl.fontFamily,
+                      fontSize: textEl.fontSize,
+                      fontWeight: textEl.fontWeight || "bold",
+                      color: textEl.color,
+                      textAlign: textEl.textAlign,
+                      overflow: "hidden",
+                      whiteSpace: "pre-wrap",
+                    }}
+                  >
+                    {textEl.content}
+                  </div>
+                );
+              } else if (el.type === "shape") {
+                const shapeEl = el as ShapeElement;
+                let shapeStyle: React.CSSProperties = {
+                  ...baseStyle,
+                  backgroundColor: shapeEl.color,
                 };
 
-                // Filters logic
-                let filters = [];
-                if (el.filters) {
-                  if (el.filters.blur) filters.push(Konva.Filters.Blur);
-                  if (el.filters.brightness) filters.push(Konva.Filters.Brighten);
-                  if (el.filters.contrast) filters.push(Konva.Filters.Contrast);
-                  // ... add others as needed
-                }
-
-                // Gradient logic
-                let fillProps: any = {};
-                if ((el.type === 'shape' || el.type === 'text') && (el as any).gradient?.enabled) {
-                  const grad = (el as any).gradient!;
-                  const stops = Array.isArray(grad.stops) ? grad.stops : [];
-                  const colorStops = stops.flatMap((s: any) => [s.offset, s.color]);
-
-                  if (grad.type === 'radial') {
-                    const start = grad.start ?? { x: 0, y: 0 };
-                    const end = grad.end ?? { x: start.x + 1, y: start.y };
-                    const radius = Math.sqrt(
-                      Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2),
-                    );
-
-                    fillProps = {
-                      fillPriority: 'radial-gradient',
-                      fillRadialGradientStartPoint: start,
-                      fillRadialGradientEndPoint: start,
-                      fillRadialGradientStartRadius: 0,
-                      fillRadialGradientEndRadius: Math.max(1, radius),
-                      fillRadialGradientColorStops: colorStops,
-                    };
-                  } else {
-                    fillProps = {
-                      fillPriority: 'linear-gradient',
-                      fillLinearGradientStartPoint: grad.start,
-                      fillLinearGradientEndPoint: grad.end,
-                      fillLinearGradientColorStops: colorStops,
-                    };
-                  }
-                } else if (el.type === 'shape') {
-                  fillProps = { fill: (el as ShapeElement).color };
-                } else if (el.type === 'text') {
-                  fillProps = { fill: (el as TextElement).color };
-                } else if (el.type === 'svg') {
-                  const svgEl = el as SvgElement;
-                  // Provide defaults for SVG properties if not specified
-                  fillProps = { 
-                    fill: svgEl.fill || '#111827',
-                    stroke: svgEl.stroke || 'none',
-                    strokeWidth: svgEl.strokeWidth ?? 0
+                if (shapeEl.shape === "circle") {
+                  shapeStyle = {
+                    ...shapeStyle,
+                    borderRadius: "50%",
+                  };
+                } else if (shapeEl.shape === "rounded-rectangle") {
+                  shapeStyle = {
+                    ...shapeStyle,
+                    borderRadius: Math.min(shapeEl.width, shapeEl.height) / 6,
                   };
                 }
 
-                // Shadow logic
-                let shadowProps: any = {};
-                if (el.shadow?.enabled) {
-                  shadowProps = {
-                    shadowColor: el.shadow.color,
-                    shadowBlur: el.shadow.blur,
-                    shadowOpacity: el.shadow.opacity,
-                    shadowOffsetX: el.shadow.offsetX,
-                    shadowOffsetY: el.shadow.offsetY,
-                  };
-                }
+                content = <div style={shapeStyle} />;
+              } else if (el.type === "image") {
+                const imgEl = el as LogoElement;
+                content = (
+                  <img
+                    src={imgEl.src}
+                    alt={imgEl.name || ""}
+                    style={{
+                      ...baseStyle,
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "cover",
+                      borderRadius: imgEl.borderRadius ?? 0,
+                    }}
+                  />
+                );
+              } else if (el.type === "icon") {
+                const iconEl = el as IconElement;
+                const emoji = ICON_EMOJI[iconEl.iconName] || "❓";
+                content = (
+                  <div
+                    style={{
+                      ...baseStyle,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: Math.min(el.width, el.height) * 0.4,
+                    }}
+                  >
+                    {emoji}
+                  </div>
+                );
+              } else if (el.type === "svg") {
+                const svgEl = el as SvgElement;
+                content = (
+                  <svg
+                    viewBox="0 0 24 24"
+                    style={{
+                      ...baseStyle,
+                      width: "100%",
+                      height: "100%",
+                    }}
+                  >
+                    <path
+                      d={svgEl.content}
+                      fill={svgEl.fill || "#111827"}
+                      stroke={svgEl.stroke || "none"}
+                      strokeWidth={svgEl.strokeWidth ?? 0}
+                    />
+                  </svg>
+                );
+              }
 
-                if (el.type === 'text') {
-                  const textEl = el as TextElement;
-                  return (
-                    <KonvaText
-                      {...commonProps}
-                      text={textEl.content}
-                      fontSize={textEl.fontSize}
-                      fontFamily={textEl.fontFamily}
-                      align={textEl.textAlign}
-                      opacity={el.opacity ?? 1}
-                      {...fillProps}
-                      {...shadowProps}
-                      filters={filters}
-                      blurRadius={el.filters?.blur}
-                      brightness={el.filters?.brightness}
-                      contrast={el.filters?.contrast}
-                    />
-                  );
-                } else if (el.type === 'shape') {
-                  const shapeEl = el as ShapeElement;
-                  if (shapeEl.shape === 'circle') {
-                    return (
-                      <Circle
-                        {...commonProps}
-                        radius={shapeEl.width / 2}
-                        offsetX={-shapeEl.width / 2}
-                        offsetY={-shapeEl.height / 2}
-                        {...fillProps}
-                        {...shadowProps}
-                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
-                        filters={filters}
-                      />
-                    );
-                  } else if (shapeEl.shape === 'star') {
-                    return (
-                      <KonvaStar
-                        {...commonProps}
-                        numPoints={5}
-                        innerRadius={shapeEl.width / 4}
-                        outerRadius={shapeEl.width / 2}
-                        offsetX={-shapeEl.width / 2}
-                        offsetY={-shapeEl.height / 2}
-                        {...fillProps}
-                        {...shadowProps}
-                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
-                        filters={filters}
-                      />
-                    );
-                  } else if (shapeEl.shape === 'triangle') {
-                    return (
-                      <Line
-                        {...commonProps}
-                        points={[0, -shapeEl.height / 2, -shapeEl.width / 2, shapeEl.height / 2, shapeEl.width / 2, shapeEl.height / 2, 0, -shapeEl.height / 2]}
-                        closed
-                        {...fillProps}
-                        {...shadowProps}
-                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
-                        filters={filters}
-                      />
-                    );
-                  } else if (shapeEl.shape === 'diamond') {
-                    return (
-                      <Line
-                        {...commonProps}
-                        points={[0, -shapeEl.height / 2, shapeEl.width / 2, 0, 0, shapeEl.height / 2, -shapeEl.width / 2, 0, 0, -shapeEl.height / 2]}
-                        closed
-                        {...fillProps}
-                        {...shadowProps}
-                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
-                        filters={filters}
-                      />
-                    );
-                  } else if (shapeEl.shape === 'pentagon') {
-                    return (
-                      <Line
-                        {...commonProps}
-                        points={[0, -shapeEl.height / 2, shapeEl.width / 2, -shapeEl.height / 6, shapeEl.width / 3, shapeEl.height / 2, -shapeEl.width / 3, shapeEl.height / 2, -shapeEl.width / 2, -shapeEl.height / 6, 0, -shapeEl.height / 2]}
-                        closed
-                        {...fillProps}
-                        {...shadowProps}
-                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
-                        filters={filters}
-                      />
-                    );
-                  } else if (shapeEl.shape === 'hexagon') {
-                    return (
-                      <Line
-                        {...commonProps}
-                        points={[shapeEl.width / 2, 0, shapeEl.width / 4, -shapeEl.height / 2, -shapeEl.width / 4, -shapeEl.height / 2, -shapeEl.width / 2, 0, -shapeEl.width / 4, shapeEl.height / 2, shapeEl.width / 4, shapeEl.height / 2, shapeEl.width / 2, 0]}
-                        closed
-                        {...fillProps}
-                        {...shadowProps}
-                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
-                        filters={filters}
-                      />
-                    );
-                  } else if (shapeEl.shape === 'octagon') {
-                    const offset = shapeEl.width / 3;
-                    return (
-                      <Line
-                        {...commonProps}
-                        points={[offset, -shapeEl.height / 2, -offset, -shapeEl.height / 2, -shapeEl.width / 2, -offset, -shapeEl.width / 2, offset, -offset, shapeEl.height / 2, offset, shapeEl.height / 2, shapeEl.width / 2, offset, shapeEl.width / 2, -offset, offset, -shapeEl.height / 2]}
-                        closed
-                        {...fillProps}
-                        {...shadowProps}
-                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
-                        filters={filters}
-                      />
-                    );
-                  } else if (shapeEl.shape === 'rounded-rectangle') {
-                    return (
-                      <Rect
-                        {...commonProps}
-                        cornerRadius={Math.min(shapeEl.width, shapeEl.height) / 6}
-                        {...fillProps}
-                        {...shadowProps}
-                        opacity={el.opacity ?? shapeEl.opacity ?? 1}
-                        filters={filters}
-                      />
-                    );
-                  }
-                  return (
-                    <Rect
-                      {...commonProps}
-                      cornerRadius={shapeEl.borderRadius}
-                      {...fillProps}
-                      {...shadowProps}
-                      opacity={el.opacity ?? shapeEl.opacity ?? 1}
-                      filters={filters}
-                    />
-                  );
-                } else if (el.type === 'image') {
-                   const imgEl = el as LogoElement;
-                   return (
-                     <URLImage 
-                        {...commonProps}
-                        src={imgEl.src}
-                        opacity={el.opacity ?? imgEl.opacity ?? 1}
-                        filters={filters}
-                        {...shadowProps}
-                     />
-                   );
-                } else if (el.type === 'icon') {
-                  const iconEl = el as IconElement;
-                  const emoji = ICON_EMOJI[iconEl.iconName] || '❓';
-                  const color = iconEl.color || '#111827';
-                  
-                  return (
-                    <KonvaText
-                      {...commonProps}
-                      text={emoji}
-                      fontSize={Math.min(el.width, el.height) * 0.4}
-                      fontFamily="Arial"
-                      fill={color}
-                      stroke={color}
-                      strokeWidth={0.5}
-                      align="center"
-                      verticalAlign="middle"
-                      opacity={el.opacity ?? 1}
-                      {...shadowProps}
-                    />
-                  );
-                } else if (el.type === 'svg') {
-                  const svgEl = el as SvgElement;
-                  // We assume the AI (and our schema rules) use a 24x24 path coordinate system.
-                  // Konva Path doesn't support width/height directly, so we scale.
-                  const vb = 24;
-                  return (
-                    <Path
-                      {...commonProps}
-                      data={svgEl.content}
-                      opacity={el.opacity ?? svgEl.opacity ?? 1}
-                      {...fillProps}
-                      {...shadowProps}
-                      scaleX={el.width / vb}
-                      scaleY={el.height / vb}
-                    />
-                  );
-                }
-                return null;
-              })}
-              <Transformer ref={transformerRef} onTransformEnd={handleTransformerTransformEnd} />
-            </Layer>
-          </Stage>
+              return (
+                <TransformBox
+                  key={el.id}
+                  transform={transform}
+                  isSelected={showSingleHandles}
+                  scale={zoom}
+                  enableRotate={true}
+                  onSelect={() => selectSingle(el.id)}
+                  onUpdate={handleUpdate}
+                >
+                  {content}
+                </TransformBox>
+              );
+            })}
+
+            {/* Group transform box for multi-select (move & scale together) */}
+            {selectedIds.length > 1 && (() => {
+              const selectedEls = renderElements.filter((e) => selectedIds.includes(e.id));
+              if (selectedEls.length < 2) return null;
+
+              const minX = Math.min(...selectedEls.map((e) => e.x));
+              const minY = Math.min(...selectedEls.map((e) => e.y));
+              const maxX = Math.max(...selectedEls.map((e) => e.x + e.width));
+              const maxY = Math.max(...selectedEls.map((e) => e.y + e.height));
+
+              const groupTransform: DomTransform = {
+                id: "group",
+                x: minX,
+                y: minY,
+                width: maxX - minX,
+                height: maxY - minY,
+                rotation: 0,
+              };
+
+              const handleGroupUpdate = (updates: Partial<DomTransform>) => {
+                const els = elements.filter((e) => selectedIds.includes(e.id));
+                if (els.length < 2) return;
+
+                const gMinX = Math.min(...els.map((e) => e.x));
+                const gMinY = Math.min(...els.map((e) => e.y));
+                const gMaxX = Math.max(...els.map((e) => e.x + e.width));
+                const gMaxY = Math.max(...els.map((e) => e.y + e.height));
+                const gWidth = gMaxX - gMinX || 1;
+                const gHeight = gMaxY - gMinY || 1;
+
+                const newX = updates.x ?? gMinX;
+                const newY = updates.y ?? gMinY;
+                const newW = updates.width ?? gWidth;
+                const newH = updates.height ?? gHeight;
+
+                const dx = newX - gMinX;
+                const dy = newY - gMinY;
+                const sx = newW / gWidth;
+                const sy = newH / gHeight;
+
+                const updated = elements.map((el) => {
+                  if (!selectedIds.includes(el.id)) return el;
+                  const relX = el.x - gMinX;
+                  const relY = el.y - gMinY;
+                  return {
+                    ...el,
+                    x: newX + relX * sx,
+                    y: newY + relY * sy,
+                    width: el.width * sx,
+                    height: el.height * sy,
+                  };
+                });
+
+                addToHistory(updated);
+              };
+
+              return (
+                <TransformBox
+                  key="group-box"
+                  transform={groupTransform}
+                  isSelected={true}
+                  scale={zoom}
+                  enableRotate={false}
+                  onSelect={() => {}}
+                  onUpdate={handleGroupUpdate}
+                >
+                  {/* Empty child: this box only shows frame + handles */}
+                  <></>
+                </TransformBox>
+              );
+            })()}
           </div>
         </div>
       </div>
