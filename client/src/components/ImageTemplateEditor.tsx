@@ -132,6 +132,10 @@ interface ImageTemplateEditorProps {
   onCanvasSizeChange?: (size: { width: number; height: number }) => void;
   aiSchemaMode?: boolean;
   onAiSchemaModeChange?: (next: boolean) => void;
+  /** Parent can capture the actual canvas DOM element (white box) for PNG export. */
+  onCanvasElementRefChange?: (el: HTMLDivElement | null) => void;
+  /** Allow parent (header) to trigger editor-level actions like undo/redo. */
+  onRegisterEditorActions?: (actions: { undo: () => void; redo: () => void }) => void;
 }
 
 export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({ 
@@ -140,6 +144,8 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   onCanvasSizeChange,
   aiSchemaMode,
   onAiSchemaModeChange,
+  onCanvasElementRefChange,
+  onRegisterEditorActions,
 }) => {
   const canvasFrameRef = useRef<HTMLDivElement | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -161,14 +167,17 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     CANVAS_PRESETS["16:9"],
   );
   const [zoom, setZoom] = useState<number>(1);
+  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [showGrid, setShowGrid] = useState<boolean>(true);
+  const [gridSize, setGridSize] = useState<number>(10);
   const canvasViewportRef = useRef<HTMLDivElement | null>(null);
 
   const panStateRef = useRef<{
     isPanning: boolean;
     startX: number;
     startY: number;
-    startScrollLeft: number;
-    startScrollTop: number;
+    startPanX: number;
+    startPanY: number;
   } | null>(null);
 
   const clampZoom = (z: number) => Math.min(4, Math.max(0.1, z));
@@ -196,6 +205,57 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     fitZoomToViewport();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvasSize.width, canvasSize.height]);
+
+  // Clamp pan so you can only move until the white canvas edges (no extra empty scroll).
+  const clampPanToCanvas = (raw: { x: number; y: number }) => {
+    const vp = canvasViewportRef.current;
+    if (!vp) return raw;
+
+    const vw = vp.clientWidth;
+    const vh = vp.clientHeight;
+    const contentW = canvasSize.width * zoom;
+    const contentH = canvasSize.height * zoom;
+
+    // Horizontal bounds
+    let minX: number;
+    let maxX: number;
+    if (contentW <= vw) {
+      const centeredX = (vw - contentW) / 2;
+      minX = maxX = centeredX;
+    } else {
+      minX = vw - contentW;
+      maxX = 0;
+    }
+
+    // Vertical bounds
+    let minY: number;
+    let maxY: number;
+    if (contentH <= vh) {
+      const centeredY = (vh - contentH) / 2;
+      minY = maxY = centeredY;
+    } else {
+      minY = vh - contentH;
+      maxY = 0;
+    }
+
+    return {
+      x: Math.min(maxX, Math.max(minX, raw.x)),
+      y: Math.min(maxY, Math.max(minY, raw.y)),
+    };
+  };
+
+  // Keep the white canvas visually centered when size or zoom changes.
+  useEffect(() => {
+    const vp = canvasViewportRef.current;
+    if (!vp) return;
+    const contentW = canvasSize.width * zoom;
+    const contentH = canvasSize.height * zoom;
+    const initial = {
+      x: (vp.clientWidth - contentW) / 2,
+      y: (vp.clientHeight - contentH) / 2,
+    };
+    setPan(clampPanToCanvas(initial));
+  }, [canvasSize.width, canvasSize.height, zoom]);
 
   useEffect(() => {
     onCanvasSizeChange?.(canvasSize);
@@ -249,6 +309,12 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     onChange(next);
     setHistoryStep(historyStep + 1);
   };
+
+  // Expose undo/redo to parent (header) so buttons there can trigger them.
+  useEffect(() => {
+    if (!onRegisterEditorActions) return;
+    onRegisterEditorActions({ undo, redo });
+  }, [onRegisterEditorActions, undo, redo]);
 
   // Lucide icon picker
   // Emoji icon choices
@@ -558,21 +624,60 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   };
 
   const addImage = (url: string) => {
-    const newElement: LogoElement = {
-      id: crypto.randomUUID(),
-      name: 'Image Layer',
-      type: 'image',
-      src: url,
-      x: 150,
-      y: 150,
-      width: 200,
-      height: 200,
-      rotation: 0,
-      zIndex: elements.length,
-      opacity: 1
+    // Load image to respect its intrinsic aspect ratio.
+    const img = new Image();
+    img.onload = () => {
+      const iw = img.naturalWidth || img.width || 1;
+      const ih = img.naturalHeight || img.height || 1;
+      const aspect = iw / ih;
+      const base = 220; // base area size in pixels
+      let width = base;
+      let height = base;
+      if (aspect >= 1) {
+        // landscape or square: fix width, scale height
+        width = base;
+        height = Math.round(base / aspect);
+      } else {
+        // portrait: fix height, scale width
+        height = base;
+        width = Math.round(base * aspect);
+      }
+
+      const newElement: LogoElement = {
+        id: crypto.randomUUID(),
+        name: 'Image Layer',
+        type: 'image',
+        src: url,
+        x: 150,
+        y: 150,
+        width,
+        height,
+        rotation: 0,
+        zIndex: elements.length,
+        opacity: 1,
+      };
+      addToHistory([...elements, newElement]);
+      setSelectedIds([newElement.id]);
     };
-    addToHistory([...elements, newElement]);
-    setSelectedIds([newElement.id]);
+    img.onerror = () => {
+      // Fallback to square if we fail to measure
+      const fallback: LogoElement = {
+        id: crypto.randomUUID(),
+        name: 'Image Layer',
+        type: 'image',
+        src: url,
+        x: 150,
+        y: 150,
+        width: 200,
+        height: 200,
+        rotation: 0,
+        zIndex: elements.length,
+        opacity: 1,
+      };
+      addToHistory([...elements, fallback]);
+      setSelectedIds([fallback.id]);
+    };
+    img.src = url;
   };
 
   const addSvg = () => {
@@ -896,8 +1001,8 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       isPanning: true,
       startX: e.clientX,
       startY: e.clientY,
-      startScrollLeft: vp.scrollLeft,
-      startScrollTop: vp.scrollTop,
+      startPanX: pan.x,
+      startPanY: pan.y,
     };
   };
 
@@ -910,8 +1015,11 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     const dx = e.clientX - state.startX;
     const dy = e.clientY - state.startY;
 
-    vp.scrollLeft = state.startScrollLeft - dx;
-    vp.scrollTop = state.startScrollTop - dy;
+    const raw = {
+      x: state.startPanX + dx,
+      y: state.startPanY + dy,
+    };
+    setPan(clampPanToCanvas(raw));
   };
 
   const handleViewportPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -934,13 +1042,66 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
 
   const hasMultiSelection = selectedIds.length > 1;
 
+  // Keyboard shortcuts: delete selection, nudge with arrows, undo/redo.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      const tag = target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) {
+        return;
+      }
+
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedIds.length > 0) {
+        e.preventDefault();
+        deleteElement();
+        return;
+      }
+
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown") {
+        if (selectedIds.length === 0) return;
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 1;
+        let dx = 0;
+        let dy = 0;
+        if (e.key === "ArrowLeft") dx = -step;
+        if (e.key === "ArrowRight") dx = step;
+        if (e.key === "ArrowUp") dy = -step;
+        if (e.key === "ArrowDown") dy = step;
+
+        const moved = elements.map((el) => {
+          if (!selectedIds.includes(el.id)) return el;
+          if (el.locked) return el;
+          return {
+            ...el,
+            x: el.x + dx,
+            y: el.y + dy,
+          };
+        });
+        addToHistory(moved);
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [elements, selectedIds, deleteElement, addToHistory, undo, redo]);
 
   return (
-    <div className="flex flex-col md:flex-row h-screen bg-[#1e1e1e] overflow-hidden text-white font-sans">
+    <div className="flex flex-col md:flex-row h-full bg-[#1e1e1e] overflow-hidden text-white font-sans">
       
       {/* LEFT TOOLBAR (mobile: horizontal bottom bar) */}
       <div className="order-2 md:order-1 w-full md:w-16 bg-[#252526] border-t md:border-t-0 md:border-r border-[#3e3e42] flex flex-row md:flex-col items-center justify-start md:justify-start py-2 md:py-4 px-2 md:px-0 gap-3 md:gap-4 z-10 overflow-visible">
-        <div className="mb-4">
+        <div className="mb-4 flex flex-col items-center gap-2">
           <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
             <Palette className="text-white" size={20} />
           </div>
@@ -1085,21 +1246,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
         
         <div className="hidden md:block flex-1" />
 
-        <div className="flex flex-col items-center gap-1 px-1">
-          <input
-            type="checkbox"
-            checked={!!aiSchemaMode}
-            disabled={!onAiSchemaModeChange}
-            onChange={(e) => onAiSchemaModeChange?.(e.target.checked)}
-            className="h-4 w-4 accent-violet-500"
-            title="AI schema mode (send element schema + canvas info + prompt; apply actions instead of sending full JSON)"
-          />
-          <div className="text-[10px] leading-none text-gray-300">Schema</div>
-        </div>
-        
         <AIModelSelector />
-        <ToolButton icon={<Undo size={20} />} onClick={undo} label="Undo" disabled={historyStep === 0} />
-        <ToolButton icon={<Redo size={20} />} onClick={redo} label="Redo" disabled={historyStep === history.length - 1} />
       </div>
 
       {/* CANVAS AREA */}
@@ -1120,7 +1267,29 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
             </select>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1 text-xs text-gray-300 select-none">
+              <input
+                type="checkbox"
+                checked={showGrid}
+                onChange={(e) => setShowGrid(e.target.checked)}
+                className="h-3 w-3 accent-blue-500"
+              />
+              <span>Grid</span>
+            </label>
+
+            <select
+              value={gridSize}
+              onChange={(e) => setGridSize(Number(e.target.value) || 10)}
+              className="bg-[#3e3e42] text-gray-100 text-xs rounded px-1.5 py-0.5"
+              title="Grid size (snap interval)"
+            >
+              <option value={5}>5px</option>
+              <option value={10}>10px</option>
+              <option value={20}>20px</option>
+              <option value={40}>40px</option>
+            </select>
+
             <button
               type="button"
               className="px-2 py-1 text-xs rounded bg-[#3e3e42] hover:bg-[#4e4e52] text-gray-100"
@@ -1173,10 +1342,10 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
           </div>
         </div>
 
-        {/* Scrollable canvas viewport */}
+        {/* Canvas viewport: square area on the left with white canvas centered inside */}
         <div
           ref={canvasViewportRef}
-          className={`flex-1 ${activeTool === 'hand' ? 'overflow-auto canvas-scrollbar cursor-grab' : 'overflow-hidden cursor-default'} flex items-center justify-center p-3 md:p-6`}
+          className={`relative w-full h-[60vh] overflow-hidden ${activeTool === 'hand' ? 'cursor-grab' : 'cursor-default'}`}
           onMouseDown={(e) => {
             // Clicking the grey area around the canvas should unselect everything.
             const frame = canvasFrameRef.current;
@@ -1191,15 +1360,32 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
           onPointerUp={handleViewportPointerUp}
         >
           <div
-            ref={canvasFrameRef}
-            className="shadow-2xl border border-[#3e3e42] bg-white relative"
+            ref={(el) => {
+              canvasFrameRef.current = el;
+              onCanvasElementRefChange?.(el);
+            }}
+            className="shadow-2xl border border-[#3e3e42] bg-white relative overflow-hidden"
             style={{
               width: canvasSize.width,
               height: canvasSize.height,
-              zoom: zoom,
               boxSizing: "content-box",
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+              transformOrigin: "top left",
             }}
           >
+            {/* Grid overlay */}
+            {showGrid && (
+              <div
+                className="absolute inset-0 pointer-events-none opacity-40"
+                style={{
+                  backgroundImage:
+                    "linear-gradient(to right, rgba(148,163,184,0.35) 1px, transparent 1px)," +
+                    "linear-gradient(to bottom, rgba(148,163,184,0.35) 1px, transparent 1px)",
+                  backgroundSize: `${gridSize}px ${gridSize}px`,
+                }}
+              />
+            )}
+
             {renderElements.map((el) => {
               if (el.visible === false) return null;
 
@@ -1231,40 +1417,102 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                 inset: 0,
               };
 
+              // Shadow CSS helpers per element type
+              const sh = el.shadow;
+              let boxShadowStyle: React.CSSProperties = {};
+              let textShadowStyle: React.CSSProperties = {};
+              let svgShadowStyle: React.CSSProperties = {};
+              if (sh && sh.enabled) {
+                const alpha = Math.max(0, Math.min(1, sh.opacity ?? 1));
+                let color = sh.color || '#000000';
+                if (color.startsWith('#') && (color.length === 7 || color.length === 4)) {
+                  const hex = color.length === 4
+                    ? `#${color[1]}${color[1]}${color[2]}${color[2]}${color[3]}${color[3]}`
+                    : color;
+                  const r = parseInt(hex.slice(1, 3), 16);
+                  const g = parseInt(hex.slice(3, 5), 16);
+                  const b = parseInt(hex.slice(5, 7), 16);
+                  color = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+                } else if (color.startsWith('rgb(')) {
+                  const inner = color.slice(4, -1);
+                  color = `rgba(${inner}, ${alpha})`;
+                }
+                const shadowString = `${sh.offsetX}px ${sh.offsetY}px ${sh.blur}px ${color}`;
+                boxShadowStyle = { boxShadow: shadowString };
+                textShadowStyle = { textShadow: shadowString };
+                svgShadowStyle = { filter: `drop-shadow(${sh.offsetX}px ${sh.offsetY}px ${sh.blur}px ${color})` };
+              }
+
+              // Gradient helper (used for text & shapes)
+              const gradient = (el as any).gradient;
+              const gradientCss: React.CSSProperties = (() => {
+                if (!gradient || !gradient.enabled || !Array.isArray(gradient.stops) || gradient.stops.length === 0) return {};
+                const stops = gradient.stops.map((s: any) => `${s.color} ${(s.offset ?? 0) * 100}%`).join(', ');
+                if (gradient.type === 'radial') {
+                  return {
+                    backgroundImage: `radial-gradient(circle, ${stops})`,
+                  };
+                }
+                const angle = typeof gradient.rotation === 'number' ? gradient.rotation : 0;
+                return {
+                  backgroundImage: `linear-gradient(${angle}deg, ${stops})`,
+                };
+              })();
+
               let content: React.ReactNode = null;
 
               if (el.type === "text") {
                 const textEl = el as TextElement;
+                const baseTextStyle: React.CSSProperties = {
+                  ...baseStyle,
+                  ...textShadowStyle,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent:
+                    textEl.textAlign === "left"
+                      ? "flex-start"
+                      : textEl.textAlign === "right"
+                      ? "flex-end"
+                      : "center",
+                  padding: 8,
+                  fontFamily: textEl.fontFamily,
+                  fontSize: textEl.fontSize,
+                  fontWeight: textEl.fontWeight || "bold",
+                  textAlign: textEl.textAlign,
+                  overflow: "hidden",
+                  whiteSpace: "pre-wrap",
+                };
+
+                const hasTextGradient = !!(gradient && gradient.enabled);
+                const textStyle: React.CSSProperties = hasTextGradient
+                  ? {
+                      ...baseTextStyle,
+                      ...gradientCss,
+                      WebkitBackgroundClip: 'text',
+                      color: 'transparent',
+                    }
+                  : {
+                      ...baseTextStyle,
+                      color: textEl.color,
+                    };
+
                 content = (
                   <div
-                    style={{
-                      ...baseStyle,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent:
-                        textEl.textAlign === "left"
-                          ? "flex-start"
-                          : textEl.textAlign === "right"
-                          ? "flex-end"
-                          : "center",
-                      padding: 8,
-                      fontFamily: textEl.fontFamily,
-                      fontSize: textEl.fontSize,
-                      fontWeight: textEl.fontWeight || "bold",
-                      color: textEl.color,
-                      textAlign: textEl.textAlign,
-                      overflow: "hidden",
-                      whiteSpace: "pre-wrap",
-                    }}
+                    style={textStyle}
                   >
                     {textEl.content}
                   </div>
                 );
               } else if (el.type === "shape") {
                 const shapeEl = el as ShapeElement;
+                const hasShapeGradient = !!(gradient && gradient.enabled);
                 let shapeStyle: React.CSSProperties = {
                   ...baseStyle,
-                  backgroundColor: shapeEl.color,
+                  ...boxShadowStyle,
+                  backgroundColor: hasShapeGradient ? undefined : shapeEl.color,
+                  ...(hasShapeGradient ? gradientCss : {}),
+                  backgroundSize: hasShapeGradient ? '100% 100%' : undefined,
+                  backgroundRepeat: hasShapeGradient ? 'no-repeat' : undefined,
                 };
 
                 if (shapeEl.shape === "circle") {
@@ -1277,20 +1525,54 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                     ...shapeStyle,
                     borderRadius: Math.min(shapeEl.width, shapeEl.height) / 6,
                   };
+                } else if (shapeEl.shape === "triangle") {
+                  shapeStyle = {
+                    ...shapeStyle,
+                    clipPath: "polygon(50% 0%, 0% 100%, 100% 100%)",
+                  };
+                } else if (shapeEl.shape === "star") {
+                  shapeStyle = {
+                    ...shapeStyle,
+                    clipPath:
+                      "polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)",
+                  };
+                } else if (shapeEl.shape === "diamond") {
+                  shapeStyle = {
+                    ...shapeStyle,
+                    clipPath: "polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)",
+                  };
+                } else if (shapeEl.shape === "pentagon") {
+                  shapeStyle = {
+                    ...shapeStyle,
+                    clipPath:
+                      "polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%)",
+                  };
+                } else if (shapeEl.shape === "hexagon") {
+                  shapeStyle = {
+                    ...shapeStyle,
+                    clipPath:
+                      "polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)",
+                  };
+                } else if (shapeEl.shape === "octagon") {
+                  shapeStyle = {
+                    ...shapeStyle,
+                    clipPath:
+                      "polygon(30% 0%, 70% 0%, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0% 70%, 0% 30%)",
+                  };
                 }
 
                 content = <div style={shapeStyle} />;
               } else if (el.type === "image") {
                 const imgEl = el as LogoElement;
                 content = (
-                  <img
-                    src={imgEl.src}
-                    alt={imgEl.name || ""}
+                  <div
                     style={{
                       ...baseStyle,
-                      width: "100%",
-                      height: "100%",
-                      objectFit: "cover",
+                      ...boxShadowStyle,
+                      backgroundImage: `url(${imgEl.src})`,
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
+                      backgroundRepeat: 'no-repeat',
                       borderRadius: imgEl.borderRadius ?? 0,
                     }}
                   />
@@ -1302,6 +1584,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                   <div
                     style={{
                       ...baseStyle,
+                      ...boxShadowStyle,
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -1318,6 +1601,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                     viewBox="0 0 24 24"
                     style={{
                       ...baseStyle,
+                      ...svgShadowStyle,
                       width: "100%",
                       height: "100%",
                     }}
@@ -1338,6 +1622,8 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                   transform={transform}
                   isSelected={showSingleHandles}
                   scale={zoom}
+                  snapToGrid={showGrid}
+                  gridSize={gridSize}
                   enableRotate={true}
                   onSelect={() => selectSingle(el.id)}
                   onUpdate={handleUpdate}
@@ -1409,6 +1695,8 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                   transform={groupTransform}
                   isSelected={true}
                   scale={zoom}
+                  snapToGrid={showGrid}
+                  gridSize={gridSize}
                   enableRotate={false}
                   onSelect={() => {}}
                   onUpdate={handleGroupUpdate}
@@ -1423,7 +1711,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       </div>
 
       {/* RIGHT LAYERS & PROPERTIES PANEL (mobile: bottom sheet area) */}
-      <div className="order-3 md:order-3 w-full md:w-80 bg-[#252526] border-t md:border-t-0 md:border-l border-[#3e3e42] flex flex-col md:h-full flex-1 min-h-0">
+      <div className="order-3 md:order-3 w-full md:w-80 bg-[#252526] border-t md:border-t-0 md:border-l border-[#3e3e42] flex flex-col md:h-[70vh] flex-1 min-h-0">
         <div className="p-4 border-b border-[#3e3e42] flex justify-between items-center bg-[#2d2d30]">
           <h2 className="font-semibold text-sm text-gray-200">Layers</h2>
           <div className="flex gap-2">
@@ -1534,7 +1822,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                         </div>
                       </div>
 
-                      {/* Styles */}
+        {/* Styles */}
                       <div className="mb-4">
                         <h4 className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-2">Style</h4>
 
@@ -1555,7 +1843,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                           />
                         </div>
                         {el.type === 'text' && (
-                          <div className="space-y-2">
+                          <div className="space-y-3">
                             <textarea value={(el as TextElement).content} onChange={(e) => updateElement(el.id, { content: e.target.value })} className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm min-h-[50px]" />
                             <div className="flex gap-2 items-center">
                               <input type="color" value={(el as TextElement).color} onChange={(e) => updateElement(el.id, { color: e.target.value })} className="h-6 w-8 bg-transparent rounded cursor-pointer"/>
@@ -1564,6 +1852,44 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                             <div>
                                <span className="text-xs text-gray-500 block mb-1">Size: {(el as TextElement).fontSize}px</span>
                                <input type="range" min="8" max="120" value={(el as TextElement).fontSize} onChange={(e) => updateElement(el.id, { fontSize: Number(e.target.value) })} className="w-full template-range"/>
+                            </div>
+
+                            {/* Font family & weight */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <span className="text-xs text-gray-500 block mb-1">Font</span>
+                                <select
+                                  value={(el as TextElement).fontFamily}
+                                  onChange={(e) => updateElement(el.id, { fontFamily: e.target.value })}
+                                  className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                >
+                                  <option value="Inter">Inter</option>
+                                  <option value="System UI">System UI</option>
+                                  <option value="Arial">Arial</option>
+                                  <option value="Helvetica">Helvetica</option>
+                                  <option value="Georgia">Georgia</option>
+                                  <option value="Times New Roman">Times New Roman</option>
+                                  <option value="Poppins">Poppins</option>
+                                  <option value="Roboto">Roboto</option>
+                                  <option value="Open Sans">Open Sans</option>
+                                  <option value="Montserrat">Montserrat</option>
+                                </select>
+                              </div>
+                              <div>
+                                <span className="text-xs text-gray-500 block mb-1">Weight</span>
+                                <select
+                                  value={(el as TextElement).fontWeight || '400'}
+                                  onChange={(e) => updateElement(el.id, { fontWeight: e.target.value as any })}
+                                  className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                >
+                                  <option value="300">Light</option>
+                                  <option value="400">Regular</option>
+                                  <option value="500">Medium</option>
+                                  <option value="600">Semi Bold</option>
+                                  <option value="700">Bold</option>
+                                  <option value="800">Extra Bold</option>
+                                </select>
+                              </div>
                             </div>
                           </div>
                         )}
@@ -1771,7 +2097,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                         )}
                       </div>
 
-                      {/* Effects */}
+        {/* Effects */}
                       <div>
                         <h4 className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-2">Effects</h4>
                          <div className="mt-2 pt-2 border-t border-[#3e3e42]">
@@ -1830,20 +2156,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                                      <span className="text-xs text-gray-400">Color</span>
                                    </div>
 
-                                   <div>
-                                     <div className="flex justify-between">
-                                       <span className="text-xs text-gray-400">Blur</span>
-                                       <span className="text-xs text-gray-500">{Math.round(el.shadow.blur)}</span>
-                                     </div>
-                                     <input
-                                       type="range"
-                                       min={0}
-                                       max={50}
-                                       value={el.shadow.blur}
-                                       onChange={(e) => updateElement(el.id, { shadow: { ...el.shadow!, blur: Number(e.target.value) } })}
-                                       className="w-full template-range"
-                                     />
-                                   </div>
+                                   {/* Blur slider removed per request; keep blur value as-is or editable via JSON if needed. */}
 
                                    <div>
                                      <div className="flex justify-between">
@@ -1904,28 +2217,9 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
         </div>
 
         {/* Global Output View (for AI / JSON requirement) */}
-        <div className="p-4 border-t border-[#3e3e42]">
-          <button
-            onClick={() => {
-              const json = JSON.stringify(elements, null, 2);
-              console.log(json);
-              alert("JSON Structure logged to console (and ready for AI)");
-            }}
-            className="w-full bg-[#3e3e42] hover:bg-[#4e4e52] text-white py-2 rounded text-xs flex items-center justify-center gap-2"
-          >
-            <Monitor size={14} /> View JSON Structure
-          </button>
-        </div>
-        
-        {/* Footer Actions */}
-        <div className="p-4 border-t border-[#3e3e42] bg-[#2d2d30] grid grid-cols-2 gap-2">
-           <button onClick={() => selectedIds.length > 0 && deleteElement()} className="bg-[#3e3e42] hover:bg-red-900/30 text-xs py-2 rounded text-gray-300 hover:text-red-400 flex items-center justify-center gap-1" title="Delete Selected">
-             <Trash2 size={14} /> Delete
-           </button>
-           <button onClick={groupElements} className="bg-[#3e3e42] hover:bg-blue-900/30 text-xs py-2 rounded text-gray-300 hover:text-blue-400 flex items-center justify-center gap-1" title="Group Selected">
-             <Group size={14} /> Group
-           </button>
-        </div>
+      
+        {/* Footer Actions (currently empty placeholder; grouping handled via toolbar/state) */}
+        <div className="p-4 border-t border-[#3e3e42] bg-[#2d2d30]"></div>
       </div>
     </div>
   );

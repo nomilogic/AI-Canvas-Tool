@@ -18,7 +18,7 @@ export const CommandBar: React.FC<CommandBarProps> = ({ onSubmit, isLoading }) =
   };
 
   return (
-    <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-full max-w-2xl px-4 z-50">
+    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 w-full max-w-2xl px-4 z-50">
       <form onSubmit={handleSubmit} className="relative group">
         <div className="absolute -inset-0.5 bg-gradient-to-r from-pink-500 to-violet-600 rounded-xl blur opacity-30 group-hover:opacity-75 transition duration-500"></div>
         <div className="relative flex items-center bg-[#1a1a1a]/90 backdrop-blur-xl border border-white/10 rounded-xl p-2 shadow-2xl">

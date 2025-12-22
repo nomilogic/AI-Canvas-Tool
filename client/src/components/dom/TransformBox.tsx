@@ -42,12 +42,17 @@ export const TransformBox: React.FC<TransformBoxProps> = ({
   const [isRotating, setIsRotating] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const transformStartRef = useRef<DomTransform>(transform);
+  // DOM ref for computing accurate screen-space center during rotation
+  const nodeRef = useRef<HTMLDivElement | null>(null);
+  const rotateCenterRef = useRef<{ x: number; y: number } | null>(null);
 
   const snap = (value: number) =>
     snapToGrid ? Math.round(value / gridSize) * gridSize : value;
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
+    // Prevent native drag/select behavior (important for images).
+    e.preventDefault();
     // Allow meta/ctrl-click for multi-select in the future if needed.
     e.stopPropagation();
     onSelect(e.metaKey || e.ctrlKey);
@@ -57,6 +62,7 @@ export const TransformBox: React.FC<TransformBoxProps> = ({
   };
 
   const handleResizeStart = (e: React.MouseEvent, handle: ResizeHandle) => {
+    e.preventDefault();
     e.stopPropagation();
     onSelect(e.metaKey || e.ctrlKey);
     setIsResizing(handle);
@@ -66,8 +72,16 @@ export const TransformBox: React.FC<TransformBoxProps> = ({
 
   const handleRotateStart = (e: React.MouseEvent) => {
     if (!enableRotate) return;
+    e.preventDefault();
     e.stopPropagation();
     onSelect(e.metaKey || e.ctrlKey);
+    // Compute rotation center in screen coordinates from the DOM rect
+    const rect = nodeRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    rotateCenterRef.current = {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    };
     setIsRotating(true);
     transformStartRef.current = transform;
   };
@@ -92,11 +106,23 @@ export const TransformBox: React.FC<TransformBoxProps> = ({
           y: snap(transformStartRef.current.y + delta.y),
         });
       } else if (isResizing) {
+        // Corner handles scale width & height together (maintain aspect ratio).
+        const isCornerHandle =
+          isResizing === "top-left" ||
+          isResizing === "top-right" ||
+          isResizing === "bottom-left" ||
+          isResizing === "bottom-right";
+        // For DOM-based editor, keep the transform box axis-aligned during resize;
+        // ignore element rotation for the resize math, we only rotate inner content.
+        const startNoRotation = {
+          ...transformStartRef.current,
+          rotation: 0,
+        };
         const updates = calculateResize(
-          transformStartRef.current,
+          startNoRotation,
           isResizing,
           delta,
-          e.shiftKey,
+          isCornerHandle ? true : e.shiftKey,
         );
         onUpdate({
           ...updates,
@@ -106,15 +132,9 @@ export const TransformBox: React.FC<TransformBoxProps> = ({
           height: snap(updates.height ?? transformStartRef.current.height),
         });
       } else if (isRotating) {
-        // Rotation is computed in screen space, so map center into screen coords.
-        const centerScreen = {
-          x:
-            (transformStartRef.current.x +
-              transformStartRef.current.width / 2) * scale,
-          y:
-            (transformStartRef.current.y +
-              transformStartRef.current.height / 2) * scale,
-        };
+        // Rotation is computed entirely in screen space using the cached center.
+        const centerScreen = rotateCenterRef.current;
+        if (!centerScreen) return;
         const angle = calculateRotation(centerScreen, {
           x: e.clientX,
           y: e.clientY,
@@ -256,16 +276,17 @@ export const TransformBox: React.FC<TransformBoxProps> = ({
 
   return (
     <>
-      {/* Content box */}
+      {/* Content box (axis-aligned transform box; inner content rotates) */}
       <div
+        ref={nodeRef}
         className="absolute select-none transition-shadow"
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
         style={{
           left: transform.x,
           top: transform.y,
           width: transform.width,
           height: transform.height,
-          transform: `rotate(${transform.rotation}deg)`,
-          transformOrigin: "center center",
           cursor: isDragging ? "grabbing" : "grab",
           boxShadow: isSelected
             ? "0 0 0 2px #3b82f6, 0 8px 16px rgba(59, 130, 246, 0.2)"
@@ -273,10 +294,18 @@ export const TransformBox: React.FC<TransformBoxProps> = ({
         }}
         onMouseDown={handleMouseDown}
       >
-        {children}
+        <div
+          className="absolute inset-0"
+          style={{
+            transform: `rotate(${transform.rotation}deg)`,
+            transformOrigin: "center center",
+          }}
+        >
+          {children}
+        </div>
       </div>
 
-      {/* Selection frame + handles */}
+      {/* Selection frame + handles (stay axis-aligned) */}
       {isSelected && (
         <>
           <div
@@ -286,8 +315,6 @@ export const TransformBox: React.FC<TransformBoxProps> = ({
               top: transform.y,
               width: transform.width,
               height: transform.height,
-              transform: `rotate(${transform.rotation}deg)`,
-              transformOrigin: "center center",
               border: "2px solid #3b82f6",
             }}
           />
@@ -299,8 +326,6 @@ export const TransformBox: React.FC<TransformBoxProps> = ({
               top: transform.y,
               width: transform.width,
               height: transform.height,
-              transform: `rotate(${transform.rotation}deg)`,
-              transformOrigin: "center center",
               pointerEvents: "none",
             }}
           >
@@ -322,6 +347,7 @@ export const TransformBox: React.FC<TransformBoxProps> = ({
                   transform: "translateX(-50%)",
                 }}
                 title="Rotate (hold Shift for 15° snapping)"
+                onMouseDown={handleRotateStart}
               >
                 <RotateCw size={14} />
               </div>

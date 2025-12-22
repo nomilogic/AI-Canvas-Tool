@@ -1,14 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ImageTemplateEditor } from '../components/ImageTemplateEditor';
 import { CommandBar } from '../components/canvas/CommandBar';
 import { TemplateElement } from '../types/templates'; // Updated import
 import { normalizeAiOutput } from '../lib/template-ai';
 import AIService from '../lib/ai-service';
 import { getAIConfig } from '../lib/ai-config';
-import { Layers, Monitor, Code, Sparkles, BrainCircuit, FileJson, FileCode } from 'lucide-react';
+import { Layers, Sparkles, BrainCircuit, FileJson, FileCode, Save, FolderOpen, Image as ImageIcon, Undo, Redo, Settings } from 'lucide-react';
 import { CodeExporter } from '../components/canvas/CodeExporter';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
+import html2canvas from 'html2canvas';
+import { ApiKeyModal } from '../components/modals/ApiKeyModal';
+
+const LAYOUTS_STORAGE_KEY = 'ai-layout-engine.layouts.v1';
+
+type SavedLayout = {
+  id: string;
+  name: string;
+  savedAt: string;
+  canvasSize: { width: number; height: number };
+  elements: TemplateElement[];
+};
 
 export default function CanvasTool() {
   const [elements, setElements] = useState<TemplateElement[]>([]);
@@ -22,6 +34,16 @@ export default function CanvasTool() {
 
   // Canvas size comes from the editor (defaults to 16:9 preset).
   const [canvasSize, setCanvasSize] = useState({ width: 1280, height: 720 });
+
+  // DOM ref to the actual rendered white canvas for PNG export.
+  const canvasDomRef = useRef<HTMLDivElement | null>(null);
+
+  // Multiple named layouts stored locally.
+  const [savedLayouts, setSavedLayouts] = useState<SavedLayout[]>([]);
+  const [selectedLayoutId, setSelectedLayoutId] = useState<string>('');
+
+  // Editor-level actions exposed from ImageTemplateEditor (for header buttons).
+  const editorActionsRef = useRef<{ undo?: () => void; redo?: () => void }>({});
 
   // AI generation strategy toggle (persisted).
   const [aiSchemaMode, setAiSchemaMode] = useState(() => {
@@ -47,6 +69,118 @@ export default function CanvasTool() {
       toast.success("Updated from JSON");
     } catch (e) {
       toast.error("Invalid JSON");
+    }
+  };
+
+  // Load saved layouts list from localStorage on mount.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(LAYOUTS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { version?: number; layouts?: SavedLayout[] };
+      if (parsed && Array.isArray(parsed.layouts)) {
+        setSavedLayouts(parsed.layouts);
+        if (parsed.layouts.length > 0) {
+          setSelectedLayoutId(parsed.layouts[0].id);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to read saved layouts', e);
+    }
+  }, []);
+
+  const persistLayouts = (layouts: SavedLayout[]) => {
+    try {
+      localStorage.setItem(LAYOUTS_STORAGE_KEY, JSON.stringify({ version: 1, layouts }));
+    } catch (e) {
+      console.error('Failed to write saved layouts', e);
+    }
+  };
+
+  const handleSaveLayout = () => {
+    try {
+      const defaultName = savedLayouts.find(l => l.id === selectedLayoutId)?.name || '';
+      const name = window.prompt('Layout name', defaultName || 'My Layout');
+      if (!name) return;
+
+      setSavedLayouts(prev => {
+        const now = new Date().toISOString();
+        const existingIndex = prev.findIndex(l => l.name.toLowerCase() === name.toLowerCase());
+        let next: SavedLayout[];
+        if (existingIndex >= 0) {
+          // Overwrite existing layout with same name.
+          next = [...prev];
+          next[existingIndex] = {
+            ...next[existingIndex],
+            savedAt: now,
+            canvasSize,
+            elements,
+          };
+        } else {
+          const newLayout: SavedLayout = {
+            id: crypto.randomUUID(),
+            name,
+            savedAt: now,
+            canvasSize,
+            elements,
+          };
+          next = [newLayout, ...prev];
+        }
+        persistLayouts(next);
+        // Select the just-saved layout.
+        const target = next.find(l => l.name.toLowerCase() === name.toLowerCase())!;
+        setSelectedLayoutId(target.id);
+        toast.success('Layout saved');
+        return next;
+      });
+    } catch (e) {
+      console.error(e);
+      toast.error('Failed to save layout');
+    }
+  };
+
+  const handleLoadLayout = () => {
+    try {
+      if (!selectedLayoutId) {
+        toast.error('Select a layout to load');
+        return;
+      }
+      const layout = savedLayouts.find(l => l.id === selectedLayoutId);
+      if (!layout) {
+        toast.error('Selected layout not found');
+        return;
+      }
+      setElements(layout.elements);
+      // Optionally also restore canvasSize if you want strict fidelity:
+      // setCanvasSize(layout.canvasSize);
+      toast.success(`Loaded layout "${layout.name}"`);
+    } catch (e) {
+      console.error(e);
+      toast.error('Failed to load layout');
+    }
+  };
+
+  const handleExportPng = async () => {
+    try {
+      const node = canvasDomRef.current;
+      if (!node) {
+        toast.error('Canvas not ready for export');
+        return;
+      }
+      const canvas = await html2canvas(node, {
+        useCORS: true,
+        backgroundColor: null,
+        scale: 2,
+      });
+      const dataUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = 'layout.png';
+      link.click();
+      toast.success('Exported PNG');
+    } catch (e) {
+      console.error(e);
+      toast.error('Failed to export PNG');
     }
   };
 
@@ -118,22 +252,89 @@ export default function CanvasTool() {
           <button onClick={() => setMode('code')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode === 'code' ? 'bg-white/10 text-white shadow-sm' : 'text-white/50 hover:text-white hover:bg-white/5'}`}>
             <FileCode className="w-4 h-4" /> Code
           </button>
+
+          {/* AI schema toggle */}
+          <label className="ml-2 flex items-center gap-1 text-xs text-white/70 select-none">
+            <input
+              type="checkbox"
+              checked={aiSchemaMode}
+              onChange={(e) => setAiSchemaMode(e.target.checked)}
+              className="h-3 w-3 accent-violet-500"
+              title="AI schema mode (use action-based schema layout)"
+            />
+            <span>Schema</span>
+          </label>
+
+          {/* Layout selection + actions */}
+          <select
+            value={selectedLayoutId}
+            onChange={(e) => setSelectedLayoutId(e.target.value)}
+            className="ml-2 bg-white/5 text-white/80 text-xs rounded px-2 py-1 border border-white/10 max-w-[180px] overflow-hidden text-ellipsis"
+            title="Saved layouts"
+          >
+            <option value="">Layouts</option>
+            {[...savedLayouts]
+              .sort((a, b) => (b.savedAt || '').localeCompare(a.savedAt || ''))
+              .map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+          </select>
+
+          <button
+            onClick={handleSaveLayout}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium text-white/70 hover:text-white hover:bg-white/5 transition-all"
+          >
+            <Save className="w-4 h-4" /> Save
+          </button>
+          <button
+            onClick={handleLoadLayout}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium text-white/70 hover:text-white hover:bg-white/5 transition-all"
+          >
+            <FolderOpen className="w-4 h-4" /> Load
+          </button>
+          <button
+            onClick={handleExportPng}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium text-white/70 hover:text-white hover:bg-white/5 transition-all"
+          >
+            <ImageIcon className="w-4 h-4" /> Export PNG
+          </button>
         </div>
 
         <div className="flex items-center gap-4">
-             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-xs font-medium">
-                {apiKey ? (
-                    <>
-                        <BrainCircuit className="w-3 h-3 text-green-400" />
-                        <span className="text-green-400">AI Active</span>
-                    </>
-                ) : (
-                    <>
-                        <div className="w-2 h-2 rounded-full bg-yellow-500/50"></div>
-                        <span className="text-white/40">Setup Key</span>
-                    </>
-                )}
-            </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => editorActionsRef.current.undo?.()}
+              className="w-8 h-8 rounded-md flex items-center justify-center bg-white/5 text-white/70 hover:text-white hover:bg-white/10"
+              title="Undo (Ctrl/Cmd+Z)"
+            >
+              <Undo className="w-3 h-3" />
+            </button>
+            <button
+              onClick={() => editorActionsRef.current.redo?.()}
+              className="w-8 h-8 rounded-md flex items-center justify-center bg-white/5 text-white/70 hover:text-white hover:bg-white/10"
+              title="Redo (Ctrl/Cmd+Shift+Z)"
+            >
+              <Redo className="w-3 h-3" />
+            </button>
+            {/* Settings icon opens the API Key modal (same behavior as before) */}
+            <ApiKeyModal apiKey={apiKey} onSave={handleApiKeySave} />
+          </div>
+
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-xs font-medium">
+            {apiKey ? (
+              <>
+                <BrainCircuit className="w-3 h-3 text-green-400" />
+                <span className="text-green-400">AI Active</span>
+              </>
+            ) : (
+              <>
+                <div className="w-2 h-2 rounded-full bg-yellow-500/50"></div>
+                <span className="text-white/40">Setup Key</span>
+              </>
+            )}
+          </div>
         </div>
       </header>
 
@@ -170,6 +371,8 @@ export default function CanvasTool() {
                       onCanvasSizeChange={setCanvasSize}
                       aiSchemaMode={aiSchemaMode}
                       onAiSchemaModeChange={setAiSchemaMode}
+                      onCanvasElementRefChange={(el) => { canvasDomRef.current = el; }}
+                      onRegisterEditorActions={(actions) => { editorActionsRef.current = actions; }}
                   />
               </div>
             )}
@@ -177,7 +380,7 @@ export default function CanvasTool() {
 
         {/* Suggestions - Only show when empty and in canvas mode */}
         {elements.length === 0 && mode === 'canvas' && (
-          <div className="absolute bottom-20 left-1/2 transform -translate-x-1/2 grid grid-cols-2 gap-2 max-w-lg w-full pointer-events-none">
+          <div className="absolute bottom-25 left-1/2 transform -translate-x-1/2 grid grid-cols-4 gap-2 max-w-[80%] w-full pointer-events-none">
             {suggestions.map((s, i) => (
               <button 
                 key={i}
