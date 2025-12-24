@@ -38,6 +38,11 @@ export interface TemplateElement {
   height: number;
   rotation?: number;
   zIndex: number;
+  /**
+   * Raw inline CSS string from the element's style attribute.
+   * This allows arbitrary CSS to round-trip from HTML without being normalized.
+   */
+  style?: string;
   filters?: FilterProps;
   shadow?: ShadowProps;
   opacity?: number;

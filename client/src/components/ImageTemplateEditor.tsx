@@ -48,6 +48,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TemplateElement, TextElement, ShapeElement, SvgElement, LogoElement, GroupElement, IconElement, FilterProps, GradientProps, ShadowProps } from "../types/templates";
+import { updateHtmlForTransforms, updateHtmlRawStyle, deleteHtmlElementsById } from "../lib/layout-html";
 import AIModelSelector from "./AIModelSelector";
 import "../styles/template-editor.css";
 
@@ -132,6 +133,10 @@ interface ImageTemplateEditorProps {
   onCanvasSizeChange?: (size: { width: number; height: number }) => void;
   aiSchemaMode?: boolean;
   onAiSchemaModeChange?: (next: boolean) => void;
+  /** The canonical HTML layout string used for rendering the canvas content. */
+  htmlLayout?: string;
+  /** Notify parent when the canonical HTML layout should change (e.g. drag/resize/rotate). */
+  onHtmlLayoutChange?: (html: string) => void;
   /** Parent can capture the actual canvas DOM element (white box) for PNG export. */
   onCanvasElementRefChange?: (el: HTMLDivElement | null) => void;
   /** Allow parent (header) to trigger editor-level actions like undo/redo. */
@@ -144,6 +149,8 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   onCanvasSizeChange,
   aiSchemaMode,
   onAiSchemaModeChange,
+  htmlLayout,
+  onHtmlLayoutChange,
   onCanvasElementRefChange,
   onRegisterEditorActions,
 }) => {
@@ -286,14 +293,16 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   };
 
   // Add History
-  const addToHistory = (newElements: TemplateElement[]) => {
+  const addToHistory = (newElements: TemplateElement[], options?: { skipOnChange?: boolean }) => {
     setHistory((prev) => {
       const nextHistory = prev.slice(0, historyStep + 1);
       nextHistory.push(newElements);
       return nextHistory;
     });
     setHistoryStep((prevStep) => prevStep + 1);
-    onChange(newElements); // Propagate change
+    if (!options?.skipOnChange) {
+      onChange(newElements); // Propagate change when we intentionally want to rebuild from elements
+    }
   };
 
   const undo = () => {
@@ -716,14 +725,29 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   // Delete Element
   const deleteElement = () => {
     if (selectedIds.length === 0) return;
+
+    // Update local elements/history without regenerating HTML from elements.
     const newElements = elements.filter(el => !selectedIds.includes(el.id));
-    addToHistory(newElements);
+    addToHistory(newElements, { skipOnChange: true });
+
+    // Delete corresponding nodes from the canonical HTML by data-el-id.
+    if (htmlLayout && onHtmlLayoutChange) {
+      const nextHtml = deleteHtmlElementsById(htmlLayout, selectedIds);
+      onHtmlLayoutChange(nextHtml);
+    }
+
     setSelectedIds([]);
   };
 
   const deleteLayerById = (id: string) => {
     const newElements = elements.filter((el) => el.id !== id);
-    addToHistory(newElements);
+    addToHistory(newElements, { skipOnChange: true });
+
+    if (htmlLayout && onHtmlLayoutChange) {
+      const nextHtml = deleteHtmlElementsById(htmlLayout, [id]);
+      onHtmlLayoutChange(nextHtml);
+    }
+
     setSelectedIds((prev) => prev.filter((x) => x !== id));
     setOpenLayerIds((prev) => prev.filter((x) => x !== id));
   };
@@ -1386,6 +1410,16 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
               />
             )}
 
+            {/* Render the canonical HTML layout as the base content so Editor matches HTML mode exactly */}
+            {htmlLayout && (
+              <div
+                className="absolute inset-0"
+                style={{ pointerEvents: 'none' }}
+                dangerouslySetInnerHTML={{ __html: htmlLayout }}
+              />
+            )}
+
+            {/* Overlay transform boxes (frame + handles only) */}
             {renderElements.map((el) => {
               if (el.visible === false) return null;
 
@@ -1402,219 +1436,46 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
               const showSingleHandles = !hasMultiSelection && isSelected;
 
               const handleUpdate = (updates: Partial<DomTransform>) => {
-                // Single-element transform updates just that element.
-                updateElement(el.id, {
+                // Compute the new transform for this element.
+                const nextTransform: DomTransform = {
+                  id: el.id,
                   x: updates.x ?? el.x,
                   y: updates.y ?? el.y,
                   width: updates.width ?? el.width,
                   height: updates.height ?? el.height,
                   rotation: updates.rotation ?? el.rotation ?? 0,
-                } as any);
+                } as DomTransform;
+
+                // Update local element history without triggering a full elements->HTML rebuild.
+                const updatedElements = elements.map((e) =>
+                  e.id === el.id
+                    ? {
+                        ...e,
+                        x: nextTransform.x,
+                        y: nextTransform.y,
+                        width: nextTransform.width,
+                        height: nextTransform.height,
+                        rotation: nextTransform.rotation,
+                      }
+                    : e,
+                );
+                addToHistory(updatedElements, { skipOnChange: true });
+
+                // Update the canonical HTML layout in-place so the visual HTML stays intact.
+                if (htmlLayout && onHtmlLayoutChange) {
+                  const nextHtml = updateHtmlForTransforms(htmlLayout, [
+                    {
+                      id: nextTransform.id,
+                      x: nextTransform.x,
+                      y: nextTransform.y,
+                      width: nextTransform.width,
+                      height: nextTransform.height,
+                      rotation: nextTransform.rotation,
+                    },
+                  ]);
+                  onHtmlLayoutChange(nextHtml);
+                }
               };
-
-              const baseStyle: React.CSSProperties = {
-                position: "absolute",
-                inset: 0,
-              };
-
-              // Shadow CSS helpers per element type
-              const sh = el.shadow;
-              let boxShadowStyle: React.CSSProperties = {};
-              let textShadowStyle: React.CSSProperties = {};
-              let svgShadowStyle: React.CSSProperties = {};
-              if (sh && sh.enabled) {
-                const alpha = Math.max(0, Math.min(1, sh.opacity ?? 1));
-                let color = sh.color || '#000000';
-                if (color.startsWith('#') && (color.length === 7 || color.length === 4)) {
-                  const hex = color.length === 4
-                    ? `#${color[1]}${color[1]}${color[2]}${color[2]}${color[3]}${color[3]}`
-                    : color;
-                  const r = parseInt(hex.slice(1, 3), 16);
-                  const g = parseInt(hex.slice(3, 5), 16);
-                  const b = parseInt(hex.slice(5, 7), 16);
-                  color = `rgba(${r}, ${g}, ${b}, ${alpha})`;
-                } else if (color.startsWith('rgb(')) {
-                  const inner = color.slice(4, -1);
-                  color = `rgba(${inner}, ${alpha})`;
-                }
-                const shadowString = `${sh.offsetX}px ${sh.offsetY}px ${sh.blur}px ${color}`;
-                boxShadowStyle = { boxShadow: shadowString };
-                textShadowStyle = { textShadow: shadowString };
-                svgShadowStyle = { filter: `drop-shadow(${sh.offsetX}px ${sh.offsetY}px ${sh.blur}px ${color})` };
-              }
-
-              // Gradient helper (used for text & shapes)
-              const gradient = (el as any).gradient;
-              const gradientCss: React.CSSProperties = (() => {
-                if (!gradient || !gradient.enabled || !Array.isArray(gradient.stops) || gradient.stops.length === 0) return {};
-                const stops = gradient.stops.map((s: any) => `${s.color} ${(s.offset ?? 0) * 100}%`).join(', ');
-                if (gradient.type === 'radial') {
-                  return {
-                    backgroundImage: `radial-gradient(circle, ${stops})`,
-                  };
-                }
-                const angle = typeof gradient.rotation === 'number' ? gradient.rotation : 0;
-                return {
-                  backgroundImage: `linear-gradient(${angle}deg, ${stops})`,
-                };
-              })();
-
-              let content: React.ReactNode = null;
-
-              if (el.type === "text") {
-                const textEl = el as TextElement;
-                const baseTextStyle: React.CSSProperties = {
-                  ...baseStyle,
-                  ...textShadowStyle,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent:
-                    textEl.textAlign === "left"
-                      ? "flex-start"
-                      : textEl.textAlign === "right"
-                      ? "flex-end"
-                      : "center",
-                  padding: 8,
-                  fontFamily: textEl.fontFamily,
-                  fontSize: textEl.fontSize,
-                  fontWeight: textEl.fontWeight || "bold",
-                  textAlign: textEl.textAlign,
-                  overflow: "hidden",
-                  whiteSpace: "pre-wrap",
-                };
-
-                const hasTextGradient = !!(gradient && gradient.enabled);
-                const textStyle: React.CSSProperties = hasTextGradient
-                  ? {
-                      ...baseTextStyle,
-                      ...gradientCss,
-                      WebkitBackgroundClip: 'text',
-                      color: 'transparent',
-                    }
-                  : {
-                      ...baseTextStyle,
-                      color: textEl.color,
-                    };
-
-                content = (
-                  <div
-                    style={textStyle}
-                  >
-                    {textEl.content}
-                  </div>
-                );
-              } else if (el.type === "shape") {
-                const shapeEl = el as ShapeElement;
-                const hasShapeGradient = !!(gradient && gradient.enabled);
-                let shapeStyle: React.CSSProperties = {
-                  ...baseStyle,
-                  ...boxShadowStyle,
-                  backgroundColor: hasShapeGradient ? undefined : shapeEl.color,
-                  ...(hasShapeGradient ? gradientCss : {}),
-                  backgroundSize: hasShapeGradient ? '100% 100%' : undefined,
-                  backgroundRepeat: hasShapeGradient ? 'no-repeat' : undefined,
-                };
-
-                if (shapeEl.shape === "circle") {
-                  shapeStyle = {
-                    ...shapeStyle,
-                    borderRadius: "50%",
-                  };
-                } else if (shapeEl.shape === "rounded-rectangle") {
-                  shapeStyle = {
-                    ...shapeStyle,
-                    borderRadius: Math.min(shapeEl.width, shapeEl.height) / 6,
-                  };
-                } else if (shapeEl.shape === "triangle") {
-                  shapeStyle = {
-                    ...shapeStyle,
-                    clipPath: "polygon(50% 0%, 0% 100%, 100% 100%)",
-                  };
-                } else if (shapeEl.shape === "star") {
-                  shapeStyle = {
-                    ...shapeStyle,
-                    clipPath:
-                      "polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)",
-                  };
-                } else if (shapeEl.shape === "diamond") {
-                  shapeStyle = {
-                    ...shapeStyle,
-                    clipPath: "polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)",
-                  };
-                } else if (shapeEl.shape === "pentagon") {
-                  shapeStyle = {
-                    ...shapeStyle,
-                    clipPath:
-                      "polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%)",
-                  };
-                } else if (shapeEl.shape === "hexagon") {
-                  shapeStyle = {
-                    ...shapeStyle,
-                    clipPath:
-                      "polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)",
-                  };
-                } else if (shapeEl.shape === "octagon") {
-                  shapeStyle = {
-                    ...shapeStyle,
-                    clipPath:
-                      "polygon(30% 0%, 70% 0%, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0% 70%, 0% 30%)",
-                  };
-                }
-
-                content = <div style={shapeStyle} />;
-              } else if (el.type === "image") {
-                const imgEl = el as LogoElement;
-                content = (
-                  <div
-                    style={{
-                      ...baseStyle,
-                      ...boxShadowStyle,
-                      backgroundImage: `url(${imgEl.src})`,
-                      backgroundSize: 'cover',
-                      backgroundPosition: 'center',
-                      backgroundRepeat: 'no-repeat',
-                      borderRadius: imgEl.borderRadius ?? 0,
-                    }}
-                  />
-                );
-              } else if (el.type === "icon") {
-                const iconEl = el as IconElement;
-                const emoji = ICON_EMOJI[iconEl.iconName] || "❓";
-                content = (
-                  <div
-                    style={{
-                      ...baseStyle,
-                      ...boxShadowStyle,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: Math.min(el.width, el.height) * 0.4,
-                    }}
-                  >
-                    {emoji}
-                  </div>
-                );
-              } else if (el.type === "svg") {
-                const svgEl = el as SvgElement;
-                content = (
-                  <svg
-                    viewBox="0 0 24 24"
-                    style={{
-                      ...baseStyle,
-                      ...svgShadowStyle,
-                      width: "100%",
-                      height: "100%",
-                    }}
-                  >
-                    <path
-                      d={svgEl.content}
-                      fill={svgEl.fill || "#111827"}
-                      stroke={svgEl.stroke || "none"}
-                      strokeWidth={svgEl.strokeWidth ?? 0}
-                    />
-                  </svg>
-                );
-              }
 
               return (
                 <TransformBox
@@ -1628,7 +1489,8 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                   onSelect={() => selectSingle(el.id)}
                   onUpdate={handleUpdate}
                 >
-                  {content}
+                  {/* Empty child: HTML is rendered separately, this just shows selection/handles */}
+                  <></>
                 </TransformBox>
               );
             })}
@@ -1686,7 +1548,32 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                   };
                 });
 
-                addToHistory(updated);
+                addToHistory(updated, { skipOnChange: true });
+
+                // Also update the underlying HTML for each selected element.
+                if (htmlLayout && onHtmlLayoutChange) {
+                  const transforms = elements
+                    .filter((el) => selectedIds.includes(el.id))
+                    .map((el) => {
+                      const relX = el.x - gMinX;
+                      const relY = el.y - gMinY;
+                      const nextX = newX + relX * sx;
+                      const nextY = newY + relY * sy;
+                      const nextW = el.width * sx;
+                      const nextH = el.height * sy;
+                      return {
+                        id: el.id,
+                        x: nextX,
+                        y: nextY,
+                        width: nextW,
+                        height: nextH,
+                        rotation: el.rotation || 0,
+                      };
+                    });
+
+                  const nextHtml = updateHtmlForTransforms(htmlLayout, transforms as any);
+                  onHtmlLayoutChange(nextHtml);
+                }
               };
 
               return (
@@ -1825,6 +1712,387 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
         {/* Styles */}
                       <div className="mb-4">
                         <h4 className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-2">Style</h4>
+
+                        {htmlLayout && onHtmlLayoutChange && (() => {
+                          const styleStr = el.style || '';
+
+                          const parseStyle = (input: string): Record<string, string> => {
+                            const map: Record<string, string> = {};
+                            input.split(';').forEach((part) => {
+                              const trimmed = part.trim();
+                              if (!trimmed) return;
+                              const idx = trimmed.indexOf(':');
+                              if (idx === -1) return;
+                              const key = trimmed.slice(0, idx).trim();
+                              const value = trimmed.slice(idx + 1).trim();
+                              if (!key) return;
+                              map[key] = value;
+                            });
+                            return map;
+                          };
+
+                          const styleMap = parseStyle(styleStr);
+                          const getCss = (prop: string) => styleMap[prop] || '';
+
+                          const applyCssPatch = (patch: Record<string, string | null>) => {
+                            const nextMap: Record<string, string> = { ...styleMap };
+                            for (const [key, value] of Object.entries(patch)) {
+                              if (!value) {
+                                delete nextMap[key];
+                              } else {
+                                nextMap[key] = value;
+                              }
+                            }
+                            const nextStyle = Object.entries(nextMap)
+                              .map(([k, v]) => `${k}:${v}`)
+                              .join(';');
+                            const nextHtml = updateHtmlRawStyle(htmlLayout, el.id, nextStyle);
+                            onHtmlLayoutChange(nextHtml);
+                          };
+
+                          const display = getCss('display');
+                          const position = getCss('position');
+                          const padding = getCss('padding');
+                          const margin = getCss('margin');
+
+                          const bgColor = getCss('background-color') || getCss('background');
+                          const borderRadius = getCss('border-radius');
+
+                          const colorCss = getCss('color');
+                          const fontSizeCss = getCss('font-size');
+                          const fontWeightCss = getCss('font-weight');
+                          const textAlignCss = getCss('text-align');
+                          const textTransformCss = getCss('text-transform');
+                          const lineHeightCss = getCss('line-height');
+                          const letterSpacingCss = getCss('letter-spacing');
+
+                          const borderWidthCss = getCss('border-width');
+                          const borderColorCss = getCss('border-color');
+                          const borderStyleCss = getCss('border-style');
+
+                          const justifyContent = getCss('justify-content');
+                          const alignItems = getCss('align-items');
+                          const flexDirection = getCss('flex-direction');
+
+                          const parsePx = (value: string): string => {
+                            const n = parseFloat(value);
+                            return Number.isFinite(n) ? String(n) : '';
+                          };
+
+                          return (
+                            <>
+                              {/* CSS Visualizer controls */}
+                              <div className="mb-3 mt-1 pt-2 border-t border-[#3e3e42] space-y-2">
+                                <div className="text-[10px] uppercase tracking-wider text-gray-500 font-bold">CSS Visualizer</div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Display</span>
+                                    <select
+                                      value={display}
+                                      onChange={(e) => applyCssPatch({ display: e.target.value || null })}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    >
+                                      <option value="">(default)</option>
+                                      <option value="block">block</option>
+                                      <option value="inline-block">inline-block</option>
+                                      <option value="flex">flex</option>
+                                      <option value="grid">grid</option>
+                                      <option value="none">none</option>
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Position</span>
+                                    <select
+                                      value={position}
+                                      onChange={(e) => applyCssPatch({ position: e.target.value || null })}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    >
+                                      <option value="">(default)</option>
+                                      <option value="absolute">absolute</option>
+                                      <option value="relative">relative</option>
+                                      <option value="fixed">fixed</option>
+                                      <option value="sticky">sticky</option>
+                                      <option value="static">static</option>
+                                    </select>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Padding (all)</span>
+                                    <input
+                                      type="number"
+                                      value={parsePx(padding)}
+                                      onChange={(e) => {
+                                        const v = e.target.value;
+                                        applyCssPatch({ padding: v ? `${v}px` : null });
+                                      }}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    />
+                                  </div>
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Margin (all)</span>
+                                    <input
+                                      type="number"
+                                      value={parsePx(margin)}
+                                      onChange={(e) => {
+                                        const v = e.target.value;
+                                        applyCssPatch({ margin: v ? `${v}px` : null });
+                                      }}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Background</span>
+                                    <input
+                                      type="color"
+                                      value={bgColor && /^#/.test(bgColor) ? bgColor : '#000000'}
+                                      onChange={(e) => applyCssPatch({ 'background-color': e.target.value })}
+                                      className="h-7 w-full bg-[#3e3e42] rounded cursor-pointer"
+                                    />
+                                  </div>
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Border Radius</span>
+                                    <input
+                                      type="number"
+                                      value={parsePx(borderRadius)}
+                                      onChange={(e) => {
+                                        const v = e.target.value;
+                                        applyCssPatch({ 'border-radius': v ? `${v}px` : null });
+                                      }}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    />
+                                  </div>
+                                </div>
+
+                                {/* Typography */}
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Text Color</span>
+                                    <input
+                                      type="color"
+                                      value={colorCss && /^#/.test(colorCss) ? colorCss : '#000000'}
+                                      onChange={(e) => applyCssPatch({ color: e.target.value })}
+                                      className="h-7 w-full bg-[#3e3e42] rounded cursor-pointer"
+                                    />
+                                  </div>
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Font Size</span>
+                                    <input
+                                      type="number"
+                                      value={parsePx(fontSizeCss)}
+                                      onChange={(e) => {
+                                        const v = e.target.value;
+                                        applyCssPatch({ 'font-size': v ? `${v}px` : null });
+                                      }}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Font Weight</span>
+                                    <select
+                                      value={fontWeightCss}
+                                      onChange={(e) => applyCssPatch({ 'font-weight': e.target.value || null })}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    >
+                                      <option value="">(default)</option>
+                                      <option value="300">300</option>
+                                      <option value="400">400</option>
+                                      <option value="500">500</option>
+                                      <option value="600">600</option>
+                                      <option value="700">700</option>
+                                      <option value="800">800</option>
+                                      <option value="900">900</option>
+                                      <option value="bold">bold</option>
+                                      <option value="normal">normal</option>
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Line Height</span>
+                                    <input
+                                      type="number"
+                                      value={parsePx(lineHeightCss)}
+                                      onChange={(e) => {
+                                        const v = e.target.value;
+                                        applyCssPatch({ 'line-height': v ? `${v}px` : null });
+                                      }}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Text Align</span>
+                                    <select
+                                      value={textAlignCss}
+                                      onChange={(e) => applyCssPatch({ 'text-align': e.target.value || null })}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    >
+                                      <option value="">(default)</option>
+                                      <option value="left">left</option>
+                                      <option value="center">center</option>
+                                      <option value="right">right</option>
+                                      <option value="justify">justify</option>
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Transform</span>
+                                    <select
+                                      value={textTransformCss}
+                                      onChange={(e) => applyCssPatch({ 'text-transform': e.target.value || null })}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    >
+                                      <option value="">(default)</option>
+                                      <option value="uppercase">uppercase</option>
+                                      <option value="lowercase">lowercase</option>
+                                      <option value="capitalize">capitalize</option>
+                                    </select>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Letter Spacing</span>
+                                    <input
+                                      type="number"
+                                      value={parsePx(letterSpacingCss)}
+                                      onChange={(e) => {
+                                        const v = e.target.value;
+                                        applyCssPatch({ 'letter-spacing': v ? `${v}px` : null });
+                                      }}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    />
+                                  </div>
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Opacity</span>
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      max={1}
+                                      step={0.05}
+                                      value={getCss('opacity') || ''}
+                                      onChange={(e) => {
+                                        const v = e.target.value;
+                                        applyCssPatch({ opacity: v || null });
+                                      }}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    />
+                                  </div>
+                                </div>
+
+                                {/* Border */}
+                                <div className="grid grid-cols-3 gap-2">
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Border W</span>
+                                    <input
+                                      type="number"
+                                      value={parsePx(borderWidthCss)}
+                                      onChange={(e) => {
+                                        const v = e.target.value;
+                                        applyCssPatch({ 'border-width': v ? `${v}px` : null });
+                                      }}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    />
+                                  </div>
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Border Col</span>
+                                    <input
+                                      type="color"
+                                      value={borderColorCss && /^#/.test(borderColorCss) ? borderColorCss : '#000000'}
+                                      onChange={(e) => applyCssPatch({ 'border-color': e.target.value })}
+                                      className="h-7 w-full bg-[#3e3e42] rounded cursor-pointer"
+                                    />
+                                  </div>
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Border Style</span>
+                                    <select
+                                      value={borderStyleCss}
+                                      onChange={(e) => applyCssPatch({ 'border-style': e.target.value || null })}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    >
+                                      <option value="">(default)</option>
+                                      <option value="solid">solid</option>
+                                      <option value="dashed">dashed</option>
+                                      <option value="dotted">dotted</option>
+                                      <option value="double">double</option>
+                                    </select>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-3 gap-2 mt-2">
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Flex Dir</span>
+                                    <select
+                                      value={flexDirection}
+                                      onChange={(e) => applyCssPatch({ 'flex-direction': e.target.value || null })}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    >
+                                      <option value="">(default)</option>
+                                      <option value="row">row</option>
+                                      <option value="row-reverse">row-reverse</option>
+                                      <option value="column">column</option>
+                                      <option value="column-reverse">column-reverse</option>
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Justify</span>
+                                    <select
+                                      value={justifyContent}
+                                      onChange={(e) => applyCssPatch({ 'justify-content': e.target.value || null })}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    >
+                                      <option value="">(default)</option>
+                                      <option value="flex-start">flex-start</option>
+                                      <option value="center">center</option>
+                                      <option value="flex-end">flex-end</option>
+                                      <option value="space-between">space-between</option>
+                                      <option value="space-around">space-around</option>
+                                      <option value="space-evenly">space-evenly</option>
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <span className="text-xs text-gray-500 block mb-1">Align</span>
+                                    <select
+                                      value={alignItems}
+                                      onChange={(e) => applyCssPatch({ 'align-items': e.target.value || null })}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs"
+                                    >
+                                      <option value="">(default)</option>
+                                      <option value="flex-start">flex-start</option>
+                                      <option value="center">center</option>
+                                      <option value="flex-end">flex-end</option>
+                                      <option value="stretch">stretch</option>
+                                      <option value="baseline">baseline</option>
+                                    </select>
+                                  </div>
+                                </div>
+
+                                {/* Raw CSS fallback */}
+                                <div className="mt-2">
+                                  <span className="text-xs text-gray-500 block mb-1">Custom CSS (inline style)</span>
+                                  <textarea
+                                    value={styleStr}
+                                    onChange={(e) => {
+                                      const nextStyle = e.target.value;
+                                      const nextHtml = updateHtmlRawStyle(htmlLayout, el.id, nextStyle);
+                                      onHtmlLayoutChange(nextHtml);
+                                    }}
+                                    className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs font-mono min-h-[60px]"
+                                    spellCheck={false}
+                                  />
+                                </div>
+                              </div>
+                            </>
+                          );
+                        })()}
 
                         {/* Opacity (all layer types) */}
                         <div className="mb-3">

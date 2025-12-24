@@ -584,7 +584,7 @@ export function normalizeAiOutput(
   return renumberZIndex(sorted.map(ensureImageSrc));
 }
 
-export type AIGenerationStrategy = "full" | "schema";
+export type AIGenerationStrategy = "full" | "schema" | "html";
 
 export type AiAction =
   | { op: "create"; element: unknown }

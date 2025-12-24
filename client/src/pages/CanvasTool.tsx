@@ -4,7 +4,8 @@ import { CommandBar } from '../components/canvas/CommandBar';
 import { TemplateElement } from '../types/templates'; // Updated import
 import { normalizeAiOutput } from '../lib/template-ai';
 import AIService from '../lib/ai-service';
-import { getAIConfig } from '../lib/ai-config';
+import { getAIConfig, setStoredProviderKey } from '../lib/ai-config';
+import { elementsToHtml, htmlToElements } from '../lib/layout-html';
 import { Layers, Sparkles, BrainCircuit, FileJson, FileCode, Save, FolderOpen, Image as ImageIcon, Undo, Redo, Settings } from 'lucide-react';
 import { CodeExporter } from '../components/canvas/CodeExporter';
 import { Toaster } from '@/components/ui/sonner';
@@ -19,12 +20,11 @@ type SavedLayout = {
   name: string;
   savedAt: string;
   canvasSize: { width: number; height: number };
-  elements: TemplateElement[];
+  html: string;
 };
 
 export default function CanvasTool() {
-  const [elements, setElements] = useState<TemplateElement[]>([]);
-  const [mode, setMode] = useState<'canvas' | 'json' | 'code'>('canvas'); // Removed 'dom' mode as new editor is canvas-first
+  const [mode, setMode] = useState<'canvas' | 'json' | 'code' | 'html'>('canvas'); // Added 'html' mode for direct HTML editing
   const [isProcessing, setIsProcessing] = useState(false);
   // Priority: Local Storage -> Env Var -> Empty
   const [apiKey, setApiKey] = useState(() => {
@@ -34,6 +34,17 @@ export default function CanvasTool() {
 
   // Canvas size comes from the editor (defaults to 16:9 preset).
   const [canvasSize, setCanvasSize] = useState({ width: 1280, height: 720 });
+
+  // HTML representation of the current layout (absolute positioned elements).
+  const [htmlLayout, setHtmlLayout] = useState<string>(() =>
+    elementsToHtml([], { width: 1280, height: 720 })
+  );
+
+  // Elements are now derived from HTML and canvas size (HTML is canonical).
+  const elements = React.useMemo<TemplateElement[]>(
+    () => htmlToElements(htmlLayout, canvasSize.width, canvasSize.height),
+    [htmlLayout, canvasSize.width, canvasSize.height]
+  );
 
   // DOM ref to the actual rendered white canvas for PNG export.
   const canvasDomRef = useRef<HTMLDivElement | null>(null);
@@ -45,14 +56,26 @@ export default function CanvasTool() {
   // Editor-level actions exposed from ImageTemplateEditor (for header buttons).
   const editorActionsRef = useRef<{ undo?: () => void; redo?: () => void }>({});
 
-  // AI generation strategy toggle (persisted).
-  const [aiSchemaMode, setAiSchemaMode] = useState(() => {
-    return localStorage.getItem('ai_schema_mode') === '1';
+  // AI generation strategy: 'full' (full JSON), 'schema' (actions JSON), 'html' (absolute HTML divs).
+  type AiStrategy = 'full' | 'schema' | 'html';
+  const [aiStrategy, setAiStrategy] = useState<AiStrategy>(() => {
+    const stored = localStorage.getItem('ai_strategy') as AiStrategy | null;
+    return stored === 'schema' || stored === 'html' || stored === 'full' ? stored : 'full';
   });
 
   useEffect(() => {
-    localStorage.setItem('ai_schema_mode', aiSchemaMode ? '1' : '0');
-  }, [aiSchemaMode]);
+    localStorage.setItem('ai_strategy', aiStrategy);
+  }, [aiStrategy]);
+
+  // On mount, if a Gemini key was saved via the old flow (gemini_api_key),
+  // sync it into the ai-config provider key store so AIService can read it.
+  useEffect(() => {
+    if (apiKey && apiKey.trim().length > 0) {
+      setStoredProviderKey('gemini', apiKey);
+    }
+    // We intentionally run this only once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Sync JSON editor when elements change (unless we are editing)
   useEffect(() => {
@@ -65,10 +88,23 @@ export default function CanvasTool() {
     try {
       const parsed = JSON.parse(jsonInput);
       const normalized = normalizeAiOutput(parsed, canvasSize.width, canvasSize.height);
-      setElements(normalized);
+      const nextHtml = elementsToHtml(normalized, canvasSize);
+      setHtmlLayout(nextHtml);
       toast.success("Updated from JSON");
     } catch (e) {
       toast.error("Invalid JSON");
+    }
+  };
+
+  const handleHtmlUpdate = () => {
+    try {
+      // Validate that the current HTML can be parsed into elements.
+      // Elements themselves are derived from htmlLayout via useMemo.
+      htmlToElements(htmlLayout, canvasSize.width, canvasSize.height);
+      toast.success('Updated from HTML');
+    } catch (e) {
+      console.error(e);
+      toast.error('Invalid HTML');
     }
   };
 
@@ -114,7 +150,7 @@ export default function CanvasTool() {
             ...next[existingIndex],
             savedAt: now,
             canvasSize,
-            elements,
+            html: htmlLayout,
           };
         } else {
           const newLayout: SavedLayout = {
@@ -122,7 +158,7 @@ export default function CanvasTool() {
             name,
             savedAt: now,
             canvasSize,
-            elements,
+            html: htmlLayout,
           };
           next = [newLayout, ...prev];
         }
@@ -150,9 +186,8 @@ export default function CanvasTool() {
         toast.error('Selected layout not found');
         return;
       }
-      setElements(layout.elements);
-      // Optionally also restore canvasSize if you want strict fidelity:
-      // setCanvasSize(layout.canvasSize);
+      setCanvasSize(layout.canvasSize);
+      setHtmlLayout(layout.html);
       toast.success(`Loaded layout "${layout.name}"`);
     } catch (e) {
       console.error(e);
@@ -187,6 +222,8 @@ export default function CanvasTool() {
   const handleApiKeySave = (key: string) => {
     setApiKey(key);
     localStorage.setItem('gemini_api_key', key);
+    // Also persist into the ai-config provider key store used by getAIConfig/AIService.
+    setStoredProviderKey('gemini', key);
     toast.success("API Key saved!");
   };
 
@@ -201,9 +238,10 @@ export default function CanvasTool() {
         elements,
         canvasSize.width,
         canvasSize.height,
-        { strategy: aiSchemaMode ? 'schema' : 'full' }
+        { strategy: aiStrategy }
       );
-      setElements(newElements);
+      const nextHtml = elementsToHtml(newElements, canvasSize);
+      setHtmlLayout(nextHtml);
       toast.success(`AI (${config.provider}) updated the layout`);
     } catch (error: any) {
       console.error("Full AI Error:", error);
@@ -252,17 +290,23 @@ export default function CanvasTool() {
           <button onClick={() => setMode('code')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode === 'code' ? 'bg-white/10 text-white shadow-sm' : 'text-white/50 hover:text-white hover:bg-white/5'}`}>
             <FileCode className="w-4 h-4" /> Code
           </button>
+          <button onClick={() => setMode('html')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode === 'html' ? 'bg-white/10 text-white shadow-sm' : 'text-white/50 hover:text-white hover:bg-white/5'}`}>
+            <FileCode className="w-4 h-4" /> HTML
+          </button>
 
-          {/* AI schema toggle */}
+          {/* AI strategy selector: full JSON, schema actions, or direct HTML */}
           <label className="ml-2 flex items-center gap-1 text-xs text-white/70 select-none">
-            <input
-              type="checkbox"
-              checked={aiSchemaMode}
-              onChange={(e) => setAiSchemaMode(e.target.checked)}
-              className="h-3 w-3 accent-violet-500"
-              title="AI schema mode (use action-based schema layout)"
-            />
-            <span>Schema</span>
+            <span>AI Mode</span>
+            <select
+              value={aiStrategy}
+              onChange={(e) => setAiStrategy(e.target.value as AiStrategy)}
+              className="ml-1 bg-transparent text-white/80 text-xs border border-white/20 rounded px-1 py-0.5"
+              title="AI generation mode"
+            >
+              <option value="full">JSON (full)</option>
+              <option value="schema">JSON (schema)</option>
+              <option value="html">HTML (absolute divs)</option>
+            </select>
           </label>
 
           {/* Layout selection + actions */}
@@ -363,14 +407,52 @@ export default function CanvasTool() {
                     <CodeExporter elements={elements} />
                  </div>
               </div>
+            ) : mode === 'html' ? (
+              <div className="w-full h-full p-8 flex gap-4">
+                {/* Pure HTML preview on the left */}
+                <div className="flex-1 flex items-center justify-center overflow-auto">
+                  <div
+                    ref={canvasDomRef}
+                    className="bg-transparent"
+                    style={{ maxWidth: '100%', maxHeight: '100%' }}
+                  >
+                    <div
+                      className="shadow-2xl border border-white/10 bg-white relative overflow-hidden"
+                      style={{ width: canvasSize.width, height: canvasSize.height }}
+                      // Render the raw HTML exactly as provided (no parsing / re-generation).
+                      dangerouslySetInnerHTML={{ __html: htmlLayout }}
+                    />
+                  </div>
+                </div>
+
+                {/* HTML source editor on the right */}
+                <div className="w-[420px] h-full bg-[#1e1e1e] rounded-lg border border-white/10 flex flex-col shadow-2xl">
+                  <div className="p-3 border-b border-white/10 text-xs text-white/50 flex justify-between items-center">
+                    <span>Editable HTML Layout</span>
+                    <button onClick={handleHtmlUpdate} className="text-violet-400 hover:text-violet-300">Apply HTML</button>
+                  </div>
+                  <textarea
+                    value={htmlLayout}
+                    onChange={(e) => setHtmlLayout(e.target.value)}
+                    className="flex-1 bg-transparent p-4 font-mono text-xs text-blue-300 resize-none outline-none"
+                    spellCheck={false}
+                  />
+                </div>
+              </div>
             ) : (
               <div className="w-full h-full">
                   <ImageTemplateEditor 
                       elements={elements}
-                      onChange={setElements}
+                      htmlLayout={htmlLayout}
+                      onHtmlLayoutChange={setHtmlLayout}
+                      // In HTML-first mode, HTML is the source of truth. All visual edits
+                      // must go through onHtmlLayoutChange; onChange is a no-op here.
+                      onChange={(_next) => {
+                        // no-op: keep htmlLayout as canonical
+                      }}
                       onCanvasSizeChange={setCanvasSize}
-                      aiSchemaMode={aiSchemaMode}
-                      onAiSchemaModeChange={setAiSchemaMode}
+                      aiSchemaMode={aiStrategy === 'schema'}
+                      onAiSchemaModeChange={(next) => setAiStrategy(next ? 'schema' : 'full')}
                       onCanvasElementRefChange={(el) => { canvasDomRef.current = el; }}
                       onRegisterEditorActions={(actions) => { editorActionsRef.current = actions; }}
                   />

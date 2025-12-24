@@ -270,6 +270,171 @@ function extractJsonObject(text: string): string {
   return cleaned.slice(start, end + 1);
 }
 
+function stripScripts(html: string): string {
+  // Remove any <script>...</script> blocks for safety before injecting into a DOM container.
+  return typeof html === 'string' ? html.replace(/<script[\s\S]*?<\/script>/gi, '') : '';
+}
+
+function parseAbsoluteHtmlToTemplateElements(
+  html: string,
+  canvasWidth: number,
+  canvasHeight: number,
+): TemplateElement[] {
+  if (typeof document === 'undefined') return [];
+
+  const sanitized = stripScripts(html);
+  const container = document.createElement('div');
+  container.innerHTML = sanitized;
+
+  const root = container.querySelector('div') as HTMLElement | null;
+  if (!root) return [];
+
+  const result: TemplateElement[] = [];
+  let zIndexCounter = 0;
+
+  const toPx = (value: string | null | undefined): number => {
+    if (!value) return 0;
+    const n = parseFloat(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
+
+  const walk = (el: Element) => {
+    if (!(el instanceof HTMLElement)) return;
+
+    const style = el.style;
+    const position = style.position || '';
+
+    if (position === 'absolute') {
+      const left = toPx(style.left);
+      const top = toPx(style.top);
+      let width = toPx(style.width);
+      let height = toPx(style.height);
+
+      if (width <= 0) width = 120;
+      if (height <= 0) height = 40;
+
+      const transform = style.transform || '';
+      let rotation = 0;
+      const match = transform.match(/rotate\(([-\d.]+)deg\)/);
+      if (match) rotation = parseFloat(match[1]);
+
+      const opacity = style.opacity ? parseFloat(style.opacity) : undefined;
+      const tag = el.tagName.toLowerCase();
+
+      // Clamp to canvas bounds as best-effort.
+      const clampedX = clamp(left, 0, Math.max(0, canvasWidth - width));
+      const clampedY = clamp(top, 0, Math.max(0, canvasHeight - height));
+
+      if (tag === 'img') {
+        const img = el as HTMLImageElement;
+        const src = img.getAttribute('src') || '';
+        const id = crypto.randomUUID();
+        const logoEl: TemplateElement = {
+          id,
+          name: img.getAttribute('alt') || 'Image',
+          type: 'image',
+          x: clampedX,
+          y: clampedY,
+          width,
+          height,
+          rotation,
+          zIndex: zIndexCounter++,
+          opacity,
+          // @ts-expect-error - src is valid on image type
+          src,
+        } as any;
+        result.push(logoEl);
+      } else if (tag === 'svg') {
+        const path = el.querySelector('path');
+        const d = path?.getAttribute('d') || '';
+        const fill = path?.getAttribute('fill') || undefined;
+        const stroke = path?.getAttribute('stroke') || undefined;
+        const strokeWidthAttr = path?.getAttribute('stroke-width');
+        const strokeWidth = strokeWidthAttr ? parseFloat(strokeWidthAttr) : undefined;
+        const id = crypto.randomUUID();
+        const svgEl: TemplateElement = {
+          id,
+          name: 'SVG',
+          type: 'svg',
+          x: clampedX,
+          y: clampedY,
+          width,
+          height,
+          rotation,
+          zIndex: zIndexCounter++,
+          opacity,
+          // @ts-expect-error - svg specific props
+          content: d,
+          fill,
+          stroke,
+          strokeWidth,
+        } as any;
+        result.push(svgEl);
+      } else {
+        const textContent = (el.textContent || '').trim();
+        const backgroundColor = style.backgroundColor || '';
+        const borderRadiusCss = style.borderRadius || '';
+        const borderRadius = borderRadiusCss ? toPx(borderRadiusCss) : undefined;
+        const fontSize = style.fontSize ? toPx(style.fontSize) : 16;
+        const color = style.color || '#000000';
+        const fontFamily = style.fontFamily || 'Inter';
+        const fontWeight = style.fontWeight || '400';
+        const textAlign = (style.textAlign as any) || 'center';
+
+        if (textContent) {
+          const id = crypto.randomUUID();
+          const textEl: TemplateElement = {
+            id,
+            name: 'Text',
+            type: 'text',
+            x: clampedX,
+            y: clampedY,
+            width,
+            height,
+            rotation,
+            zIndex: zIndexCounter++,
+            opacity,
+            // @ts-expect-error - text specific props
+            content: textContent,
+            fontSize,
+            fontFamily,
+            color,
+            fontWeight,
+            textAlign,
+          } as any;
+          result.push(textEl);
+        } else if (backgroundColor) {
+          const id = crypto.randomUUID();
+          const shapeEl: TemplateElement = {
+            id,
+            name: 'Shape',
+            type: 'shape',
+            x: clampedX,
+            y: clampedY,
+            width,
+            height,
+            rotation,
+            zIndex: zIndexCounter++,
+            opacity,
+            // @ts-expect-error - shape specific props
+            shape: borderRadius && borderRadius > Math.min(width, height) / 3 ? 'circle' : 'rectangle',
+            color: backgroundColor,
+            borderRadius,
+          } as any;
+          result.push(shapeEl);
+        }
+      }
+    }
+
+    Array.from(el.children).forEach(walk);
+  };
+
+  walk(root);
+  return result;
+}
+
 function summarizeElementsForPrompt(elements: TemplateElement[]): unknown {
   // Compact summary (ids + bounds + a few key fields) to avoid sending full JSON.
   const MAX_TEXT = 120;
@@ -820,6 +985,50 @@ export async function generateLayout(
       const promptLower = prompt.toLowerCase();
 
       const strategy: AIGenerationStrategy = options?.strategy ?? "full";
+
+      // HTML strategy: ask the model to return an HTML snippet with absolutely positioned elements,
+      // then parse that back into TemplateElement objects for the editor.
+      if (strategy === "html") {
+        const sampleHtml = `
+<div style="position:relative;width:${canvasWidth}px;height:${canvasHeight}px;background:#ffffff;">
+  <div style="position:absolute;left:40px;top:40px;width:240px;height:80px;background:#111827;border-radius:16px;"></div>
+  <div style="position:absolute;left:56px;top:56px;width:208px;height:48px;color:#ffffff;font-size:20px;font-family:Inter;font-weight:600;display:flex;align-items:center;justify-content:center;text-align:center;">
+    Hero Title
+  </div>
+  <img src=\"https://via.placeholder.com/260x160\" alt=\"Image\" style=\"position:absolute;left:320px;top:80px;width:260px;height:160px;object-fit:cover;border-radius:18px;\" />
+  <div style=\"position:absolute;left:620px;top:120px;width:80px;height:80px;background:#3b82f6;border-radius:9999px;\"></div>
+  <svg viewBox=\"0 0 24 24\" style=\"position:absolute;left:640px;top:136px;width:40px;height:40px;\">\r\n    <path d=\"M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z\" fill=\"#ffffff\" />\r\n  </svg>
+</div>`;
+
+        const htmlContext = `
+CANVAS DIMENSIONS:
+- width: ${canvasWidth}
+- height: ${canvasHeight}
+
+EXISTING ELEMENT SUMMARY (for reference only, you do NOT need to mirror it exactly):
+${JSON.stringify(summarizeElementsForPrompt(currentElements), null, 2)}
+
+SAMPLE HTML SNIPPET (style/structure to follow):
+${sampleHtml}
+
+USER COMMAND:
+"${prompt}"
+
+TASK:
+- Return ONLY a raw HTML snippet that represents the desired layout.
+- Use a single root <div> with style="position:relative;width:{canvasWidth}px;height:{canvasHeight}px;background:#ffffff;".
+- Inside it, use <div>, <img>, and <svg> elements with inline styles and position:absolute; left/top/width/height in pixels.
+- Do NOT return Markdown, JSON, backticks, or explanations; only HTML.
+`;
+
+        const htmlResult = await model.generateContent([htmlContext]);
+        const htmlText = htmlResult.response.text();
+        const parsed = parseAbsoluteHtmlToTemplateElements(htmlText, canvasWidth, canvasHeight);
+        if (parsed.length > 0) {
+          return parsed;
+        }
+        // Fallback: if parsing fails, continue to normal JSON pipeline below.
+      }
 
       const context =
         strategy === "schema"
