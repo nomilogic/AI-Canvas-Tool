@@ -49,13 +49,48 @@ export function elementsToHtml(
       if (el.type === "shape") {
         const s = el as ShapeElement;
         const shapeStyle: string[] = [];
+
         if (s.color) shapeStyle.push(`background:${s.color}`);
+
+        // Encode the logical shape type into CSS so non-rectangular shapes (triangle,
+        // diamond, etc.) are actually visible in the HTML renderer.
+        switch ((s as any).shape) {
+          case "circle":
+            shapeStyle.push("border-radius:9999px");
+            break;
+          case "triangle":
+            shapeStyle.push("clip-path:polygon(50% 0,100% 100%,0 100%)");
+            break;
+          case "diamond":
+            shapeStyle.push("clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)");
+            break;
+          case "pentagon":
+            shapeStyle.push("clip-path:polygon(50% 0,100% 38%,82% 100%,18% 100%,0 38%)");
+            break;
+          case "hexagon":
+            shapeStyle.push("clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%)");
+            break;
+          case "octagon":
+            shapeStyle.push(
+              "clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%)",
+            );
+            break;
+          case "rounded-rectangle":
+            shapeStyle.push("border-radius:16px");
+            break;
+        }
+
+        // Explicit borderRadius on the element overrides the canned defaults above.
         if (typeof (s as any).borderRadius === "number") {
           shapeStyle.push(`border-radius:${Math.round((s as any).borderRadius)}px`);
         }
-        // Merge shape-specific style into the main style string.
+
         const merged = style.concat(shapeStyle);
-        return `<div data-el-id="${el.id}" style="${merged.join(";")}"></div>`;
+        const dataAttrs = [`data-el-id=\"${el.id}\"`, (s as any).shape ? `data-shape=\"${(s as any).shape}\"` : null]
+          .filter(Boolean)
+          .join(" ");
+
+        return `<div ${dataAttrs} style="${merged.join(";")}"></div>`;
       }
 
       if (el.type === "text") {
@@ -163,16 +198,21 @@ export function updateHtmlForTransforms(
     style.width = `${Math.round(t.width)}px`;
     style.height = `${Math.round(t.height)}px`;
 
-    const rotation = Math.round(t.rotation || 0);
-    const current = style.transform || "";
+    // Clear opposing positional constraints so left/top/width/height fully define
+    // the box. This avoids distortions when the original HTML used right/bottom.
+    style.right = "";
+    style.bottom = "";
 
-    // Strip any existing rotate(...) from the transform while preserving others.
-    const withoutRotate = current.replace(/rotate\([^)]*\)/, "").trim();
-    if (rotation === 0) {
-      style.transform = withoutRotate;
+    const rotation = Math.round(t.rotation || 0);
+
+    // For edited elements we canonicalize transforms to "rotate(...)" only.
+    // Any previous translate/scale/etc. is baked into left/top/width/height via
+    // parseAbsoluteHtmlToTemplateElements, so keeping them here would double-apply
+    // the effect and cause scaling/offset bugs.
+    if (!rotation) {
+      style.transform = "";
     } else {
-      const rotateStr = `rotate(${rotation}deg)`;
-      style.transform = withoutRotate ? `${withoutRotate} ${rotateStr}` : rotateStr;
+      style.transform = `rotate(${rotation}deg)`;
     }
   }
 
@@ -244,14 +284,19 @@ export function ensureHtmlHasElementIds(html: string): string {
   container.innerHTML = stripScripts(html);
 
   const walk = (el: Element) => {
-    if (!(el instanceof HTMLElement)) return;
-    const style = el.style;
-    if (style.position === "absolute") {
-      const existingId = el.getAttribute("data-el-id");
+    // Treat both HTML and SVG elements as candidates. Many SVG tags still expose
+    // a .style declaration and participate in absolute layout when authored with
+    // inline styles.
+    const anyEl = el as any;
+    const style: CSSStyleDeclaration | undefined = anyEl && anyEl.style;
+
+    if (style && style.position === "absolute") {
+      const existingId = anyEl.getAttribute?.("data-el-id");
       if (!existingId || existingId.trim().length === 0) {
-        el.setAttribute("data-el-id", crypto.randomUUID());
+        anyEl.setAttribute("data-el-id", crypto.randomUUID());
       }
     }
+
     Array.from(el.children).forEach(walk);
   };
 
@@ -300,20 +345,35 @@ function parseAbsoluteHtmlToTemplateElements(
     };
 
     const walk = (el: Element) => {
-      if (!(el instanceof HTMLElement)) return;
-
-      const style = el.style;
-      const rawStyleAttr = el.getAttribute("style") || "";
+      // Support both HTML and SVG elements; many SVGs participate in layout with
+      // inline styles just like divs.
+      const anyEl = el as any;
+      const style: CSSStyleDeclaration = anyEl.style || ({} as any);
+      const rawStyleAttr = (anyEl.getAttribute?.("style") as string) || "";
       const position = style.position || "";
 
       if (position === "absolute") {
-        // Use the actual rendered box relative to the root so CSS (flex, fonts, etc.)
-        // is respected even when width/height are not explicitly set inline.
-        const rect = el.getBoundingClientRect();
+        // Use the actual rendered box *and* any inline left/top/width/height so we
+        // don't accidentally change the element's size when rotating.
+        const rect = anyEl.getBoundingClientRect();
+
+        // Start from the rendered box relative to root.
         let x = rect.left - rootRect.left;
         let y = rect.top - rootRect.top;
         let width = rect.width;
         let height = rect.height;
+
+        // Prefer inline CSS geometry when present; for rotated elements this keeps
+        // width/height stable instead of recomputing from the rotated bounding box.
+        const cssLeft = style.left || style.insetInlineStart || "";
+        const cssTop = style.top || style.insetBlockStart || "";
+        if (cssLeft) x = toPx(cssLeft);
+        if (cssTop) y = toPx(cssTop);
+
+        const cssWidth = style.width;
+        const cssHeight = style.height;
+        if (cssWidth) width = toPx(cssWidth);
+        if (cssHeight) height = toPx(cssHeight);
 
         if (width <= 0) width = toPx(style.width) || 120;
         if (height <= 0) height = toPx(style.height) || 40;
@@ -324,13 +384,13 @@ function parseAbsoluteHtmlToTemplateElements(
         if (match) rotation = parseFloat(match[1]);
 
         const opacity = style.opacity ? parseFloat(style.opacity) : undefined;
-        const tag = el.tagName.toLowerCase();
+        const tag = (anyEl.tagName as string).toLowerCase();
 
-        const existingId = el.getAttribute("data-el-id");
+        const existingId = anyEl.getAttribute?.("data-el-id") as string | null;
         const id = existingId && existingId.trim().length > 0 ? existingId : crypto.randomUUID();
 
         if (tag === "img") {
-          const img = el as HTMLImageElement;
+          const img = anyEl as HTMLImageElement;
           const src = img.getAttribute("src") || "";
           const logoEl: TemplateElement = {
             id,
@@ -349,7 +409,7 @@ function parseAbsoluteHtmlToTemplateElements(
           } as any;
           result.push(logoEl);
         } else if (tag === "svg") {
-          const path = el.querySelector("path");
+          const path = anyEl.querySelector("path");
           const d = path?.getAttribute("d") || "";
           const fill = path?.getAttribute("fill") || undefined;
           const stroke = path?.getAttribute("stroke") || undefined;
@@ -375,7 +435,7 @@ function parseAbsoluteHtmlToTemplateElements(
           } as any;
           result.push(svgEl);
         } else {
-          const textContent = (el.textContent || "").trim();
+          const textContent = (anyEl.textContent || "").trim();
           const backgroundColor = style.backgroundColor || "";
           const borderRadiusCss = style.borderRadius || "";
           const borderRadius = borderRadiusCss ? toPx(borderRadiusCss) : undefined;
@@ -384,6 +444,7 @@ function parseAbsoluteHtmlToTemplateElements(
           const fontFamily = style.fontFamily || "Inter";
           const fontWeight = style.fontWeight || "400";
           const textAlign = (style.textAlign as any) || "center";
+          const dataShape = anyEl.getAttribute?.("data-shape");
 
           if (textContent) {
             const textEl: TemplateElement = {
@@ -408,6 +469,11 @@ function parseAbsoluteHtmlToTemplateElements(
             } as any;
             result.push(textEl);
           } else if (backgroundColor) {
+            // Preserve the original logical shape if it was encoded, otherwise infer from borderRadius.
+            const inferredShape =
+              borderRadius && borderRadius > Math.min(width, height) / 3 ? "circle" : "rectangle";
+            const shapeKind = (dataShape as any) || inferredShape;
+
             const shapeEl: TemplateElement = {
               id,
               name: "Shape",
@@ -421,7 +487,7 @@ function parseAbsoluteHtmlToTemplateElements(
               style: rawStyleAttr,
               opacity,
               // @ts-expect-error - shape specific props
-              shape: borderRadius && borderRadius > Math.min(width, height) / 3 ? "circle" : "rectangle",
+              shape: shapeKind,
               color: backgroundColor,
               borderRadius,
             } as any;
@@ -474,4 +540,48 @@ export function htmlToElements(
   canvasHeight: number,
 ): TemplateElement[] {
   return parseAbsoluteHtmlToTemplateElements(html, canvasWidth, canvasHeight);
+}
+
+/**
+ * Append one or more new TemplateElements to an existing HTML layout without
+ * rebuilding the whole tree. This is used when the user adds new layers from
+ * the toolbar while working with rich AI-authored HTML.
+ */
+export function appendElementsToHtml(
+  html: string,
+  elements: TemplateElement[],
+  canvasSize: { width: number; height: number },
+): string {
+  if (!html || typeof document === "undefined" || !Array.isArray(elements) || elements.length === 0) {
+    return html;
+  }
+
+  const container = document.createElement("div");
+  container.innerHTML = stripScripts(html);
+
+  // Reuse the same root selection logic as the HTML parser so we append inside
+  // the main canvas element rather than outside it.
+  let root: HTMLElement | null = container.querySelector("body");
+  if (!root) {
+    root = container.querySelector("div");
+  }
+  if (!root) {
+    root = container.firstElementChild as HTMLElement | null;
+  }
+  if (!root) {
+    root = container;
+  }
+
+  // Generate standalone HTML for just the new elements, then strip its wrapper
+  // and append the children into the existing root.
+  const tmp = document.createElement("div");
+  tmp.innerHTML = elementsToHtml(elements, canvasSize);
+  const generatedRoot = tmp.firstElementChild as HTMLElement | null;
+  if (generatedRoot) {
+    while (generatedRoot.firstChild) {
+      root.appendChild(generatedRoot.firstChild);
+    }
+  }
+
+  return container.innerHTML;
 }

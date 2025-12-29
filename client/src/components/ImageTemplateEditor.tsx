@@ -48,7 +48,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TemplateElement, TextElement, ShapeElement, SvgElement, LogoElement, GroupElement, IconElement, FilterProps, GradientProps, ShadowProps } from "../types/templates";
-import { updateHtmlForTransforms, updateHtmlRawStyle, deleteHtmlElementsById, updateHtmlTextContent } from "../lib/layout-html";
+import { updateHtmlForTransforms, updateHtmlRawStyle, deleteHtmlElementsById, updateHtmlTextContent, appendElementsToHtml } from "../lib/layout-html";
 import AIModelSelector from "./AIModelSelector";
 import "../styles/template-editor.css";
 
@@ -577,9 +577,35 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       opacity: 1,
     };
 
-    addToHistory([...elements, newElement]);
+    addToHistory([...elements, newElement], { skipOnChange: true });
     setSelectedIds([newElement.id]);
     setIconPopoverOpen(false);
+
+    // For now, treat icons as text-like boxes in the HTML layer so they at least
+    // appear and are movable, even if they don't perfectly match the emoji
+    // rendering model.
+    if (htmlLayout && onHtmlLayoutChange) {
+      const approxText: TextElement = {
+        id: newElement.id,
+        name: newElement.name,
+        type: 'text',
+        x: newElement.x,
+        y: newElement.y,
+        width: newElement.width,
+        height: newElement.height,
+        rotation: newElement.rotation,
+        zIndex: newElement.zIndex,
+        opacity: newElement.opacity,
+        content: ICON_EMOJI[iconName] || iconName,
+        fontSize: 32,
+        fontFamily: 'Inter',
+        color: newElement.color,
+        textAlign: 'center',
+        fontWeight: 'bold',
+      } as any;
+      const nextHtml = appendElementsToHtml(htmlLayout, [approxText], canvasSize);
+      onHtmlLayoutChange(nextHtml);
+    }
   };
 
   // Element Creators
@@ -603,8 +629,13 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       textAlign: 'center',
       fontWeight: 'bold'
     };
-    addToHistory([...elements, newElement]);
+    addToHistory([...elements, newElement], { skipOnChange: true });
     setSelectedIds([newElement.id]);
+
+    if (htmlLayout && onHtmlLayoutChange) {
+      const nextHtml = appendElementsToHtml(htmlLayout, [newElement], canvasSize);
+      onHtmlLayoutChange(nextHtml);
+    }
   };
 
   const getRandomColor = () => {
@@ -628,8 +659,13 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       color: getRandomColor(),
       opacity: 1
     };
-    addToHistory([...elements, newElement]);
+    addToHistory([...elements, newElement], { skipOnChange: true });
     setSelectedIds([newElement.id]);
+
+    if (htmlLayout && onHtmlLayoutChange) {
+      const nextHtml = appendElementsToHtml(htmlLayout, [newElement], canvasSize);
+      onHtmlLayoutChange(nextHtml);
+    }
   };
 
   const addImage = (url: string) => {
@@ -665,8 +701,13 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
         zIndex: elements.length,
         opacity: 1,
       };
-      addToHistory([...elements, newElement]);
+      addToHistory([...elements, newElement], { skipOnChange: true });
       setSelectedIds([newElement.id]);
+
+      if (htmlLayout && onHtmlLayoutChange) {
+        const nextHtml = appendElementsToHtml(htmlLayout, [newElement], canvasSize);
+        onHtmlLayoutChange(nextHtml);
+      }
     };
     img.onerror = () => {
       // Fallback to square if we fail to measure
@@ -683,8 +724,13 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
         zIndex: elements.length,
         opacity: 1,
       };
-      addToHistory([...elements, fallback]);
+      addToHistory([...elements, fallback], { skipOnChange: true });
       setSelectedIds([fallback.id]);
+
+      if (htmlLayout && onHtmlLayoutChange) {
+        const nextHtml = appendElementsToHtml(htmlLayout, [fallback], canvasSize);
+        onHtmlLayoutChange(nextHtml);
+      }
     };
     img.src = url;
   };
@@ -707,8 +753,13 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       stroke: '#000000',
       strokeWidth: 0
     };
-    addToHistory([...elements, newElement]);
+    addToHistory([...elements, newElement], { skipOnChange: true });
     setSelectedIds([newElement.id]);
+
+    if (htmlLayout && onHtmlLayoutChange) {
+      const nextHtml = appendElementsToHtml(htmlLayout, [newElement], canvasSize);
+      onHtmlLayoutChange(nextHtml);
+    }
   };
 
   // Update Attributes
@@ -1809,6 +1860,77 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                           const borderColorCss = getCss('border-color');
                           const borderStyleCss = getCss('border-style');
 
+                          // Helpers to derive a reasonable hex color preview for <input type="color">
+                          const rgbStringToHex = (rgb: string): string | null => {
+                            const m = rgb.trim().match(/^rgba?\(([^)]+)\)/i);
+                            if (!m) return null;
+                            const parts = m[1]
+                              .split(',')
+                              .map((p) => parseFloat(p.trim()))
+                              .filter((n) => Number.isFinite(n));
+                            if (parts.length < 3) return null;
+                            const [r, g, b] = parts;
+                            const to2 = (v: number) => {
+                              const n = Math.max(0, Math.min(255, Math.round(v)));
+                              return n.toString(16).padStart(2, '0');
+                            };
+                            return `#${to2(r)}${to2(g)}${to2(b)}`;
+                          };
+
+                          const cssColorToHex = (value: string): string | null => {
+                            if (!value) return null;
+                            let v = value.trim();
+
+                            // If it's already a hex color.
+                            const directHex = v.match(/^#([0-9a-fA-F]{3,8})$/);
+                            if (directHex) {
+                              const hex = directHex[0];
+                              if (hex.length === 4) {
+                                // #rgb -> #rrggbb
+                                const r = hex[1];
+                                const g = hex[2];
+                                const b = hex[3];
+                                return `#${r}${r}${g}${g}${b}${b}`;
+                              }
+                              return hex.length >= 7 ? hex.slice(0, 7) : hex;
+                            }
+
+                            // If inside a gradient, try to pick the first color token.
+                            if (/gradient\(/i.test(v)) {
+                              const hexMatch = v.match(/#([0-9a-fA-F]{3,8})/);
+                              if (hexMatch) {
+                                return cssColorToHex(hexMatch[0]);
+                              }
+                              const rgbMatch = v.match(/rgba?\([^)]*\)/i);
+                              if (rgbMatch) {
+                                return rgbStringToHex(rgbMatch[0]);
+                              }
+                            }
+
+                            // rgb/rgba
+                            if (/^rgba?\(/i.test(v)) {
+                              return rgbStringToHex(v);
+                            }
+
+                            // Fallback: use browser to resolve named colors etc.
+                            if (typeof document !== 'undefined') {
+                              try {
+                                const el = document.createElement('div');
+                                el.style.color = v;
+                                el.style.position = 'absolute';
+                                el.style.visibility = 'hidden';
+                                document.body.appendChild(el);
+                                const computed = window.getComputedStyle(el).color;
+                                document.body.removeChild(el);
+                                return rgbStringToHex(computed) ?? null;
+                              } catch {
+                                // ignore
+                              }
+                            }
+
+                            return null;
+                          };
+
                           const justifyContent = getCss('justify-content');
                           const alignItems = getCss('align-items');
                           const flexDirection = getCss('flex-direction');
@@ -1887,12 +2009,12 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                                 <div className="grid grid-cols-2 gap-2">
                                   <div>
                                     <span className="text-xs text-gray-500 block mb-1">Background</span>
-                                    <input
+                                      <input
                                       type="color"
-                                      value={bgColor && /^#/.test(bgColor) ? bgColor : '#000000'}
+                                      value={cssColorToHex(bgColor) ?? '#000000'}
                                       onChange={(e) => applyCssPatch({ 'background-color': e.target.value })}
                                       className="h-7 w-full bg-[#3e3e42] rounded cursor-pointer"
-                                    />
+                                      />
                                   </div>
                                   <div>
                                     <span className="text-xs text-gray-500 block mb-1">Border Radius</span>
@@ -1912,12 +2034,12 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                                 <div className="grid grid-cols-2 gap-2">
                                   <div>
                                     <span className="text-xs text-gray-500 block mb-1">Text Color</span>
-                                    <input
+                                      <input
                                       type="color"
-                                      value={colorCss && /^#/.test(colorCss) ? colorCss : '#000000'}
+                                      value={cssColorToHex(colorCss) ?? '#000000'}
                                       onChange={(e) => applyCssPatch({ color: e.target.value })}
                                       className="h-7 w-full bg-[#3e3e42] rounded cursor-pointer"
-                                    />
+                                      />
                                   </div>
                                   <div>
                                     <span className="text-xs text-gray-500 block mb-1">Font Size</span>
@@ -2043,12 +2165,12 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                                   </div>
                                   <div>
                                     <span className="text-xs text-gray-500 block mb-1">Border Col</span>
-                                    <input
+                                      <input
                                       type="color"
-                                      value={borderColorCss && /^#/.test(borderColorCss) ? borderColorCss : '#000000'}
+                                      value={cssColorToHex(borderColorCss) ?? '#000000'}
                                       onChange={(e) => applyCssPatch({ 'border-color': e.target.value })}
                                       className="h-7 w-full bg-[#3e3e42] rounded cursor-pointer"
-                                    />
+                                      />
                                   </div>
                                   <div>
                                     <span className="text-xs text-gray-500 block mb-1">Border Style</span>

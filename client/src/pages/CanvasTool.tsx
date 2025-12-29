@@ -63,10 +63,21 @@ export default function CanvasTool() {
     return stored === 'schema' || stored === 'html' || stored === 'full' ? stored : 'full';
   });
 
+  // Persist AI mode selection
   useEffect(() => {
     localStorage.setItem('ai_strategy', aiStrategy);
   }, [aiStrategy]);
 
+  // Whenever we enter canvas mode, normalize the HTML so every absolutely
+  // positioned element has a stable data-el-id. This ensures pasted HTML
+  // (like your example) becomes fully editable without requiring a manual
+  // "Apply HTML" first.
+  useEffect(() => {
+    if (mode !== 'canvas') return;
+    setHtmlLayout((prev) => ensureHtmlHasElementIds(prev));
+  }, [mode]);
+
+  // On mount, if a Gemini key was saved via the old flow (gemini_api_key),
   // On mount, if a Gemini key was saved via the old flow (gemini_api_key),
   // sync it into the ai-config provider key store so AIService can read it.
   useEffect(() => {
@@ -447,10 +458,15 @@ export default function CanvasTool() {
                       elements={elements}
                       htmlLayout={htmlLayout}
                       onHtmlLayoutChange={setHtmlLayout}
-                      // In HTML-first mode, HTML is the source of truth. All visual edits
-                      // must go through onHtmlLayoutChange; onChange is a no-op here.
+                      // In HTML-first mode, the raw HTML is the single source of truth.
+                      // All visual edits must go through onHtmlLayoutChange helpers that
+                      // patch inline CSS in-place (updateHtmlForTransforms, updateHtmlRawStyle,
+                      // updateHtmlTextContent, etc.). Regenerating the layout from the
+                      // simplified TemplateElement model would destroy complex AI styles
+                      // (gradients, shadows, custom fonts), so we intentionally ignore
+                      // onChange here in canvas mode.
                       onChange={(_next) => {
-                        // no-op: keep htmlLayout as canonical
+                        // no-op on purpose to preserve original HTML styling.
                       }}
                       onCanvasSizeChange={setCanvasSize}
                       aiSchemaMode={aiStrategy === 'schema'}
