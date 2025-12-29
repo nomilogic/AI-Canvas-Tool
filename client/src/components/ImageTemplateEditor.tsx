@@ -48,7 +48,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TemplateElement, TextElement, ShapeElement, SvgElement, LogoElement, GroupElement, IconElement, FilterProps, GradientProps, ShadowProps } from "../types/templates";
-import { updateHtmlForTransforms, updateHtmlRawStyle, deleteHtmlElementsById } from "../lib/layout-html";
+import { updateHtmlForTransforms, updateHtmlRawStyle, deleteHtmlElementsById, updateHtmlTextContent } from "../lib/layout-html";
 import AIModelSelector from "./AIModelSelector";
 import "../styles/template-editor.css";
 
@@ -1066,6 +1066,25 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
 
   const hasMultiSelection = selectedIds.length > 1;
 
+  // Helper: apply a transform change coming from numeric inputs (Layout panel)
+  const applyTransformFromInputs = (id: string, partial: Partial<DomTransform>) => {
+    if (!htmlLayout || !onHtmlLayoutChange) return;
+    const el = elements.find((e) => e.id === id);
+    if (!el) return;
+
+    const next: DomTransform = {
+      id,
+      x: partial.x ?? el.x,
+      y: partial.y ?? el.y,
+      width: partial.width ?? el.width,
+      height: partial.height ?? el.height,
+      rotation: partial.rotation ?? el.rotation ?? 0,
+    };
+
+    const nextHtml = updateHtmlForTransforms(htmlLayout, [next]);
+    onHtmlLayoutChange(nextHtml);
+  };
+
   // Keyboard shortcuts: delete selection, nudge with arrows, undo/redo.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1690,21 +1709,41 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                         <div className="grid grid-cols-2 gap-2 mb-2">
                           <div>
                             <span className="text-xs text-gray-500 block mb-1">X</span>
-                            <input type="number" value={Math.round(el.x)} onChange={(e) => updateElement(el.id, { x: Number(e.target.value) })} className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"/>
+                            <input
+                              type="number"
+                              value={Math.round(el.x)}
+                              onChange={(e) => applyTransformFromInputs(el.id, { x: Number(e.target.value) })}
+                              className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"
+                            />
                           </div>
                           <div>
                             <span className="text-xs text-gray-500 block mb-1">Y</span>
-                            <input type="number" value={Math.round(el.y)} onChange={(e) => updateElement(el.id, { y: Number(e.target.value) })} className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"/>
+                            <input
+                              type="number"
+                              value={Math.round(el.y)}
+                              onChange={(e) => applyTransformFromInputs(el.id, { y: Number(e.target.value) })}
+                              className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"
+                            />
                           </div>
                         </div>
                         <div className="grid grid-cols-2 gap-2">
                           <div>
                             <span className="text-xs text-gray-500 block mb-1">W</span>
-                            <input type="number" value={Math.round(el.width)} onChange={(e) => updateElement(el.id, { width: Number(e.target.value) })} className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"/>
+                            <input
+                              type="number"
+                              value={Math.round(el.width)}
+                              onChange={(e) => applyTransformFromInputs(el.id, { width: Number(e.target.value) })}
+                              className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"
+                            />
                           </div>
                           <div>
                             <span className="text-xs text-gray-500 block mb-1">H</span>
-                            <input type="number" value={Math.round(el.height)} onChange={(e) => updateElement(el.id, { height: Number(e.target.value) })} className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"/>
+                            <input
+                              type="number"
+                              value={Math.round(el.height)}
+                              onChange={(e) => applyTransformFromInputs(el.id, { height: Number(e.target.value) })}
+                              className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"
+                            />
                           </div>
                         </div>
                       </div>
@@ -2112,7 +2151,16 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                         </div>
                         {el.type === 'text' && (
                           <div className="space-y-3">
-                            <textarea value={(el as TextElement).content} onChange={(e) => updateElement(el.id, { content: e.target.value })} className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm min-h-[50px]" />
+                            <textarea
+                              value={(el as TextElement).content}
+                              onChange={(e) => {
+                                if (htmlLayout && onHtmlLayoutChange) {
+                                  const nextHtml = updateHtmlTextContent(htmlLayout, el.id, e.target.value);
+                                  onHtmlLayoutChange(nextHtml);
+                                }
+                              }}
+                              className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm min-h-[50px]"
+                            />
                             <div className="flex gap-2 items-center">
                               <input type="color" value={(el as TextElement).color} onChange={(e) => updateElement(el.id, { color: e.target.value })} className="h-6 w-8 bg-transparent rounded cursor-pointer"/>
                               <span className="text-xs text-gray-400">Color</span>

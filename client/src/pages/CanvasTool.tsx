@@ -5,7 +5,7 @@ import { TemplateElement } from '../types/templates'; // Updated import
 import { normalizeAiOutput } from '../lib/template-ai';
 import AIService from '../lib/ai-service';
 import { getAIConfig, setStoredProviderKey } from '../lib/ai-config';
-import { elementsToHtml, htmlToElements } from '../lib/layout-html';
+import { elementsToHtml, htmlToElements, ensureHtmlHasElementIds } from '../lib/layout-html';
 import { Layers, Sparkles, BrainCircuit, FileJson, FileCode, Save, FolderOpen, Image as ImageIcon, Undo, Redo, Settings } from 'lucide-react';
 import { CodeExporter } from '../components/canvas/CodeExporter';
 import { Toaster } from '@/components/ui/sonner';
@@ -98,9 +98,11 @@ export default function CanvasTool() {
 
   const handleHtmlUpdate = () => {
     try {
-      // Validate that the current HTML can be parsed into elements.
-      // Elements themselves are derived from htmlLayout via useMemo.
-      htmlToElements(htmlLayout, canvasSize.width, canvasSize.height);
+      // Normalize the HTML to ensure every absolute element has a stable data-el-id.
+      const normalizedHtml = ensureHtmlHasElementIds(htmlLayout);
+      // Validate that the normalized HTML can be parsed into elements.
+      htmlToElements(normalizedHtml, canvasSize.width, canvasSize.height);
+      setHtmlLayout(normalizedHtml);
       toast.success('Updated from HTML');
     } catch (e) {
       console.error(e);

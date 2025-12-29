@@ -214,6 +214,51 @@ export function deleteHtmlElementsById(html: string, ids: string[]): string {
   return container.innerHTML;
 }
 
+/**
+ * Replace the text content of the element with the given id.
+ * This is used when editing text layers directly from the editor.
+ */
+export function updateHtmlTextContent(
+  html: string,
+  id: string,
+  text: string,
+): string {
+  if (!html || typeof document === "undefined") return html;
+  const container = document.createElement("div");
+  container.innerHTML = stripScripts(html);
+  const el = container.querySelector<HTMLElement>(`[data-el-id="${id}"]`);
+  if (!el) return html;
+  el.textContent = text;
+  return container.innerHTML;
+}
+
+/**
+ * Ensure every absolutely positioned element in the HTML has a stable data-el-id
+ * attribute, without changing any other structure or styles. This is used when
+ * the user pastes raw HTML in the HTML tab so the editor can later target and
+ * modify specific elements reliably.
+ */
+export function ensureHtmlHasElementIds(html: string): string {
+  if (!html || typeof document === "undefined") return html;
+  const container = document.createElement("div");
+  container.innerHTML = stripScripts(html);
+
+  const walk = (el: Element) => {
+    if (!(el instanceof HTMLElement)) return;
+    const style = el.style;
+    if (style.position === "absolute") {
+      const existingId = el.getAttribute("data-el-id");
+      if (!existingId || existingId.trim().length === 0) {
+        el.setAttribute("data-el-id", crypto.randomUUID());
+      }
+    }
+    Array.from(el.children).forEach(walk);
+  };
+
+  Array.from(container.children).forEach(walk);
+  return container.innerHTML;
+}
+
 function parseAbsoluteHtmlToTemplateElements(
   html: string,
   canvasWidth: number,
@@ -223,167 +268,200 @@ function parseAbsoluteHtmlToTemplateElements(
 
   const sanitized = stripScripts(html);
   const container = document.createElement("div");
+  // Attach off-screen so we can rely on real DOM layout (getBoundingClientRect)
+  container.style.position = "absolute";
+  container.style.left = "-10000px";
+  container.style.top = "-10000px";
+  container.style.visibility = "hidden";
   container.innerHTML = sanitized;
+  document.body.appendChild(container);
 
-  // Prefer a body element if present (for full HTML documents), otherwise
-  // fall back to the first <div>, then the first element child.
-  let root: HTMLElement | null = container.querySelector("body");
-  if (!root) {
-    root = container.querySelector("div");
-  }
-  if (!root) {
-    root = container.firstElementChild as HTMLElement | null;
-  }
-  if (!root) return [];
+  try {
+    // Prefer a body element if present (for full HTML documents), otherwise
+    // fall back to the first <div>, then the first element child.
+    let root: HTMLElement | null = container.querySelector("body");
+    if (!root) {
+      root = container.querySelector("div");
+    }
+    if (!root) {
+      root = container.firstElementChild as HTMLElement | null;
+    }
+    if (!root) return [];
 
-  const result: TemplateElement[] = [];
-  let zIndexCounter = 0;
+    const rootRect = root.getBoundingClientRect();
 
-  const toPx = (value: string | null | undefined): number => {
-    if (!value) return 0;
-    const n = parseFloat(value);
-    return Number.isFinite(n) ? n : 0;
-  };
+    const result: TemplateElement[] = [];
+    let zIndexCounter = 0;
 
-  const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
+    const toPx = (value: string | null | undefined): number => {
+      if (!value) return 0;
+      const n = parseFloat(value);
+      return Number.isFinite(n) ? n : 0;
+    };
 
-  const walk = (el: Element) => {
-    if (!(el instanceof HTMLElement)) return;
+    const walk = (el: Element) => {
+      if (!(el instanceof HTMLElement)) return;
 
-    const style = el.style;
-    const rawStyleAttr = el.getAttribute("style") || "";
-    const position = style.position || "";
+      const style = el.style;
+      const rawStyleAttr = el.getAttribute("style") || "";
+      const position = style.position || "";
 
-    if (position === "absolute") {
-      const left = toPx(style.left);
-      const top = toPx(style.top);
-      let width = toPx(style.width);
-      let height = toPx(style.height);
+      if (position === "absolute") {
+        // Use the actual rendered box relative to the root so CSS (flex, fonts, etc.)
+        // is respected even when width/height are not explicitly set inline.
+        const rect = el.getBoundingClientRect();
+        let x = rect.left - rootRect.left;
+        let y = rect.top - rootRect.top;
+        let width = rect.width;
+        let height = rect.height;
 
-      if (width <= 0) width = 120;
-      if (height <= 0) height = 40;
+        if (width <= 0) width = toPx(style.width) || 120;
+        if (height <= 0) height = toPx(style.height) || 40;
 
-      const transform = style.transform || "";
-      let rotation = 0;
-      const match = transform.match(/rotate\(([-\d.]+)deg\)/);
-      if (match) rotation = parseFloat(match[1]);
+        const transform = style.transform || "";
+        let rotation = 0;
+        const match = transform.match(/rotate\(([-\d.]+)deg\)/);
+        if (match) rotation = parseFloat(match[1]);
 
-      const opacity = style.opacity ? parseFloat(style.opacity) : undefined;
-      const tag = el.tagName.toLowerCase();
+        const opacity = style.opacity ? parseFloat(style.opacity) : undefined;
+        const tag = el.tagName.toLowerCase();
 
-      // Use raw positions from HTML to preserve the author's layout exactly.
-      const clampedX = left;
-      const clampedY = top;
+        const existingId = el.getAttribute("data-el-id");
+        const id = existingId && existingId.trim().length > 0 ? existingId : crypto.randomUUID();
 
-      const existingId = el.getAttribute("data-el-id");
-      const id = existingId && existingId.trim().length > 0 ? existingId : crypto.randomUUID();
-
-      if (tag === "img") {
-        const img = el as HTMLImageElement;
-        const src = img.getAttribute("src") || "";
-        const logoEl: TemplateElement = {
-          id,
-          name: img.getAttribute("alt") || "Image",
-          type: "image",
-          x: clampedX,
-          y: clampedY,
-          width,
-          height,
-          rotation,
-          zIndex: zIndexCounter++,
-          style: rawStyleAttr,
-          opacity,
-          // @ts-expect-error - src is valid on image type
-          src,
-        } as any;
-        result.push(logoEl);
-      } else if (tag === "svg") {
-        const path = el.querySelector("path");
-        const d = path?.getAttribute("d") || "";
-        const fill = path?.getAttribute("fill") || undefined;
-        const stroke = path?.getAttribute("stroke") || undefined;
-        const strokeWidthAttr = path?.getAttribute("stroke-width");
-        const strokeWidth = strokeWidthAttr ? parseFloat(strokeWidthAttr) : undefined;
-        const svgEl: TemplateElement = {
-          id,
-          name: "SVG",
-          type: "svg",
-          x: clampedX,
-          y: clampedY,
-          width,
-          height,
-          rotation,
-          zIndex: zIndexCounter++,
-          style: rawStyleAttr,
-          opacity,
-          // @ts-expect-error - svg specific props
-          content: d,
-          fill,
-          stroke,
-          strokeWidth,
-        } as any;
-        result.push(svgEl);
-      } else {
-        const textContent = (el.textContent || "").trim();
-        const backgroundColor = style.backgroundColor || "";
-        const borderRadiusCss = style.borderRadius || "";
-        const borderRadius = borderRadiusCss ? toPx(borderRadiusCss) : undefined;
-        const fontSize = style.fontSize ? toPx(style.fontSize) : 16;
-        const color = style.color || "#000000";
-        const fontFamily = style.fontFamily || "Inter";
-        const fontWeight = style.fontWeight || "400";
-        const textAlign = (style.textAlign as any) || "center";
-
-        if (textContent) {
-          const textEl: TemplateElement = {
+        if (tag === "img") {
+          const img = el as HTMLImageElement;
+          const src = img.getAttribute("src") || "";
+          const logoEl: TemplateElement = {
             id,
-            name: "Text",
-            type: "text",
-            x: clampedX,
-            y: clampedY,
+            name: img.getAttribute("alt") || "Image",
+            type: "image",
+            x,
+            y,
             width,
             height,
             rotation,
             zIndex: zIndexCounter++,
             style: rawStyleAttr,
             opacity,
-            // @ts-expect-error - text specific props
-            content: textContent,
-            fontSize,
-            fontFamily,
-            color,
-            fontWeight,
-            textAlign,
+            // @ts-expect-error - src is valid on image type
+            src,
           } as any;
-          result.push(textEl);
-        } else if (backgroundColor) {
-          const shapeEl: TemplateElement = {
+          result.push(logoEl);
+        } else if (tag === "svg") {
+          const path = el.querySelector("path");
+          const d = path?.getAttribute("d") || "";
+          const fill = path?.getAttribute("fill") || undefined;
+          const stroke = path?.getAttribute("stroke") || undefined;
+          const strokeWidthAttr = path?.getAttribute("stroke-width");
+          const strokeWidth = strokeWidthAttr ? parseFloat(strokeWidthAttr) : undefined;
+          const svgEl: TemplateElement = {
             id,
-            name: "Shape",
-            type: "shape",
-            x: clampedX,
-            y: clampedY,
+            name: "SVG",
+            type: "svg",
+            x,
+            y,
             width,
             height,
             rotation,
             zIndex: zIndexCounter++,
             style: rawStyleAttr,
             opacity,
-            // @ts-expect-error - shape specific props
-            shape: borderRadius && borderRadius > Math.min(width, height) / 3 ? "circle" : "rectangle",
-            color: backgroundColor,
-            borderRadius,
+            // @ts-expect-error - svg specific props
+            content: d,
+            fill,
+            stroke,
+            strokeWidth,
           } as any;
-          result.push(shapeEl);
+          result.push(svgEl);
+        } else {
+          const textContent = (el.textContent || "").trim();
+          const backgroundColor = style.backgroundColor || "";
+          const borderRadiusCss = style.borderRadius || "";
+          const borderRadius = borderRadiusCss ? toPx(borderRadiusCss) : undefined;
+          const fontSize = style.fontSize ? toPx(style.fontSize) : 16;
+          const color = style.color || "#000000";
+          const fontFamily = style.fontFamily || "Inter";
+          const fontWeight = style.fontWeight || "400";
+          const textAlign = (style.textAlign as any) || "center";
+
+          if (textContent) {
+            const textEl: TemplateElement = {
+              id,
+              name: "Text",
+              type: "text",
+              x,
+              y,
+              width,
+              height,
+              rotation,
+              zIndex: zIndexCounter++,
+              style: rawStyleAttr,
+              opacity,
+              // @ts-expect-error - text specific props
+              content: textContent,
+              fontSize,
+              fontFamily,
+              color,
+              fontWeight,
+              textAlign,
+            } as any;
+            result.push(textEl);
+          } else if (backgroundColor) {
+            const shapeEl: TemplateElement = {
+              id,
+              name: "Shape",
+              type: "shape",
+              x,
+              y,
+              width,
+              height,
+              rotation,
+              zIndex: zIndexCounter++,
+              style: rawStyleAttr,
+              opacity,
+              // @ts-expect-error - shape specific props
+              shape: borderRadius && borderRadius > Math.min(width, height) / 3 ? "circle" : "rectangle",
+              color: backgroundColor,
+              borderRadius,
+            } as any;
+            result.push(shapeEl);
+          } else {
+            // Fallback: treat any other absolutely positioned element as a generic
+            // frame so it is still selectable and transformable in the editor.
+            const frameEl: TemplateElement = {
+              id,
+              name: "Frame",
+              type: "shape",
+              x,
+              y,
+              width,
+              height,
+              rotation,
+              zIndex: zIndexCounter++,
+              style: rawStyleAttr,
+              opacity,
+              // @ts-expect-error - shape specific props
+              shape: "rectangle",
+              color: "transparent",
+              borderRadius,
+            } as any;
+            result.push(frameEl);
+          }
         }
       }
+
+      Array.from(el.children).forEach(walk);
+    };
+
+    walk(root);
+    return result;
+  } finally {
+    // Always detach the off-screen container
+    if (container.parentNode) {
+      container.parentNode.removeChild(container);
     }
-
-    Array.from(el.children).forEach(walk);
-  };
-
-  walk(root);
-  return result;
+  }
 }
 
 /**
