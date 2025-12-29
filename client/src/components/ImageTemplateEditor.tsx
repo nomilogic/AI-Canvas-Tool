@@ -48,8 +48,10 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TemplateElement, TextElement, ShapeElement, SvgElement, LogoElement, GroupElement, IconElement, FilterProps, GradientProps, ShadowProps } from "../types/templates";
-import { updateHtmlForTransforms, updateHtmlRawStyle, deleteHtmlElementsById, updateHtmlTextContent, appendElementsToHtml } from "../lib/layout-html";
+import { updateHtmlForTransforms, updateHtmlRawStyle, deleteHtmlElementsById, updateHtmlTextContent, appendElementsToHtml, updateHtmlSvgContent } from "../lib/layout-html";
 import AIModelSelector from "./AIModelSelector";
+import callPuterChat from "../lib/puter-client";
+import { toast } from "sonner";
 import "../styles/template-editor.css";
 
 // Icon map for rendering Lucide icons
@@ -273,6 +275,12 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
 
   // Tools state
   const [activeTool, setActiveTool] = useState<string>('select');
+
+  // Puter / Claude (Ask Claude panel)
+  const [claudeOpen, setClaudeOpen] = useState(false);
+  const [claudePrompt, setClaudePrompt] = useState<string>("Describe an element...");
+  const [claudeResponse, setClaudeResponse] = useState<string | null>(null);
+  const [claudeLoading, setClaudeLoading] = useState<boolean>(false);
 
   // Selection
   // - Canvas click selects a single layer.
@@ -531,19 +539,24 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   const addLucideIcon = (LucideIcon: any, name?: string) => {
     const d = lucideToPathData(LucideIcon, name);
     if (!d) {
-      alert(`Icon "${name || 'Unknown'}" is not yet supported. Try Heart, Check, Star, Smile, Plus, Minus, or X.`);
+      alert(`Icon \"${name || 'Unknown'}\" is not yet supported. Try Heart, Check, Star, Smile, Plus, Minus, or X.`);
       return;
     }
+
+    const baseSize = 100;
+    const centerX = Math.round((canvasSize.width - baseSize) / 2);
+    const centerY = Math.round((canvasSize.height - baseSize) / 2);
 
     const newElement: SvgElement = {
       id: crypto.randomUUID(),
       name: name ? `Icon: ${name}` : 'Icon',
       type: 'svg',
       content: d,
-      x: 200,
-      y: 200,
-      width: 100,
-      height: 100,
+      viewBox: '0 0 24 24',
+      x: centerX,
+      y: centerY,
+      width: baseSize,
+      height: baseSize,
       rotation: 0,
       zIndex: elements.length,
       opacity: 1,
@@ -737,21 +750,26 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
 
   const addSvg = () => {
     // Adding a sample SVG path (a heart)
+    const baseSize = 100;
+    const centerX = Math.round((canvasSize.width - baseSize) / 2);
+    const centerY = Math.round((canvasSize.height - baseSize) / 2);
+
     const newElement: SvgElement = {
       id: crypto.randomUUID(),
       name: 'SVG Layer',
       type: 'svg',
       content: "M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z",
-      x: 200,
-      y: 200,
-      width: 100,
-      height: 100,
+      viewBox: '0 0 24 24',
+      x: centerX,
+      y: centerY,
+      width: baseSize,
+      height: baseSize,
       rotation: 0,
       zIndex: elements.length,
       opacity: 1,
       fill: '#ef4444',
       stroke: '#000000',
-      strokeWidth: 0
+      strokeWidth: 0,
     };
     addToHistory([...elements, newElement], { skipOnChange: true });
     setSelectedIds([newElement.id]);
@@ -1433,6 +1451,71 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
             >
               Fit
             </button>
+
+            {/* Ask Claude popover */}
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="px-3 py-1 text-xs rounded bg-[#6b21a8] hover:bg-[#7c3aed] text-white ml-2"
+                  title="Ask Claude"
+                >
+                  Ask Claude
+                </button>
+              </PopoverTrigger>
+              <PopoverContent side="bottom" align="end" className="w-80 bg-[#151515] border-[#2b2b2b] text-white p-3">
+                <div className="text-sm mb-2 font-medium">Ask Claude (Puter)</div>
+                <textarea value={claudePrompt} onChange={(e) => setClaudePrompt(e.target.value)} className="w-full bg-[#222] rounded px-2 py-1 text-sm text-white min-h-[80px]" />
+                <div className="flex items-center gap-2 mt-2">
+                  <button
+                    onClick={async () => {
+                      const enabled = localStorage.getItem('puter_enabled') === '1';
+                      if (!enabled) {
+                        toast.error('Puter is not enabled in Settings (⚙️)');
+                        return;
+                      }
+                      const model = localStorage.getItem('puter_model') || 'claude-sonnet-4-5';
+                      const stream = localStorage.getItem('puter_stream') === '1';
+                      setClaudeResponse(null);
+                      setClaudeLoading(true);
+                      try {
+                        if (stream) {
+                          const it: any = await callPuterChat(claudePrompt, { model, stream: true });
+                          let acc = '';
+                          for await (const part of it) {
+                            acc += part?.text ?? '';
+                            setClaudeResponse(acc);
+                          }
+                        } else {
+                          const resp: any = await callPuterChat(claudePrompt, { model, stream: false });
+                          const text = resp?.message?.content?.[0]?.text ?? JSON.stringify(resp);
+                          setClaudeResponse(text);
+                        }
+                        toast.success('Claude answered');
+                      } catch (err) {
+                        console.error('Claude call failed', err);
+                        toast.error('Claude call failed (see console)');
+                        setClaudeResponse('Error: see console');
+                      } finally {
+                        setClaudeLoading(false);
+                      }
+                    }}
+                    className="px-3 py-1 rounded bg-violet-600 hover:bg-violet-700 text-white text-sm"
+                    disabled={claudeLoading}
+                  >
+                    {claudeLoading ? 'Thinking…' : 'Send'}
+                  </button>
+                  <button onClick={() => { setClaudePrompt(''); setClaudeResponse(null); }} className="px-2 py-1 rounded bg-white/5 text-sm">Clear</button>
+                </div>
+                <div className="mt-3 text-xs text-white/60">
+                  <div className="font-semibold">Note</div>
+                  <div>Uses Puter.js (Claude). Puter is user-pays — enabling it will make client-side calls that may incur cost.</div>
+                </div>
+                <div className="mt-3 bg-[#0b0b0b] p-2 rounded text-sm max-h-40 overflow-auto">
+                  {claudeResponse ? <pre className="whitespace-pre-wrap text-sm">{claudeResponse}</pre> : <div className="text-xs text-white/40">No answer yet</div>}
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
 
@@ -2336,6 +2419,48 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                               <input type="color" value={(el as any).color || (el as any).fill} onChange={(e) => updateElement(el.id, el.type === 'shape' ? { color: e.target.value } : { fill: e.target.value })} className="h-6 w-8 bg-transparent rounded cursor-pointer"/>
                               <span className="text-xs text-gray-400">Fill Color</span>
                             </div>
+                        )}
+
+                        {el.type === 'svg' && (
+                          <div className="mt-3 pt-2 border-t border-[#3e3e42] space-y-2">
+                            <div className="text-[10px] uppercase tracking-wider text-gray-500 font-bold">SVG</div>
+                            <div>
+                              <span className="text-xs text-gray-500 block mb-1">Path (d attribute)</span>
+                              <textarea
+                                value={(el as SvgElement).content}
+                                onChange={(e) => {
+                                  const d = e.target.value;
+                                  updateElement(el.id, { content: d } as any);
+                                  if (htmlLayout && onHtmlLayoutChange) {
+                                    const nextHtml = updateHtmlSvgContent(htmlLayout, el.id, { d });
+                                    onHtmlLayoutChange(nextHtml);
+                                  }
+                                }}
+                                className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs font-mono min-h-[60px]"
+                                spellCheck={false}
+                              />
+                            </div>
+                            <div>
+                              <span className="text-xs text-gray-500 block mb-1">ViewBox</span>
+                              <input
+                                type="text"
+                                value={(el as SvgElement).viewBox ?? ''}
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  const viewBox = raw.trim().length > 0 ? raw : undefined;
+                                  updateElement(el.id, { viewBox } as any);
+                                  if (htmlLayout && onHtmlLayoutChange) {
+                                    const nextHtml = updateHtmlSvgContent(htmlLayout, el.id, {
+                                      viewBox: viewBox ?? null,
+                                    });
+                                    onHtmlLayoutChange(nextHtml);
+                                  }
+                                }}
+                                placeholder="e.g. 0 0 24 24"
+                                className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs font-mono"
+                              />
+                            </div>
+                          </div>
                         )}
                         
                         {(el.type === 'text' || el.type === 'shape') && (
