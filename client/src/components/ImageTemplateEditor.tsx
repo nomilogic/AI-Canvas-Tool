@@ -273,6 +273,19 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   const canvasFrameRef = useRef<HTMLDivElement | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [openLayerIds, setOpenLayerIds] = useState<string[]>([]);
+  const [panelOnLeft, setPanelOnLeft] = useState<boolean>(() => {
+    try {
+      return (localStorage.getItem('layers_side') || 'right') === 'left';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('layers_side', panelOnLeft ? 'left' : 'right');
+    } catch {}
+  }, [panelOnLeft]);
   const [iconPopoverOpen, setIconPopoverOpen] = useState(false);
   const [shapesPopoverOpen, setShapesPopoverOpen] = useState(false);
   const [openCollapsible, setOpenCollapsible] = useState<string | null>(null);
@@ -1329,10 +1342,10 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     <div className="flex flex-col md:flex-row h-full bg-[#1e1e1e] overflow-hidden text-white font-sans">
       
       {/* LEFT TOOLBAR (mobile: horizontal bottom bar) */}
-      <div className="order-2 md:order-1 w-full md:w-16 bg-[#252526] border-t md:border-t-0 md:border-r border-[#3e3e42] flex flex-row md:flex-col items-center justify-start md:justify-start py-2 md:py-4 px-2 md:px-0 gap-3 md:gap-4 z-10 overflow-visible">
-        <div className="mb-4 flex flex-col items-center gap-2">
-          <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
-            <Palette className="text-white" size={20} />
+      <div className="order-2 md:order-1 w-full md:w-16 bg-[#252526] border-t md:border-t-0 md:border-r border-[#3e3e42] flex flex-row md:flex-col items-center justify-start md:justify-start py-1 md:py-2 px-2 md:px-0 gap-3 md:gap-4 z-10 overflow-visible">
+        <div className="mb-2 flex flex-col items-center gap-2">
+          <div className="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center">
+            <Palette className="text-white" size={22} />
           </div>
         </div>
 
@@ -1479,7 +1492,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       </div>
 
       {/* CANVAS AREA */}
-      <div className="order-1 md:order-2 flex-1 bg-[#1e1e1e] relative overflow-hidden flex flex-col p-2 md:p-4 gap-2 md:gap-4 min-h-[45vh] md:min-h-0">
+      <div className={`order-1 ${panelOnLeft ? 'md:order-3' : 'md:order-2'} flex-1 bg-[#1e1e1e] relative overflow-hidden flex flex-col p-2 md:p-4 gap-2 md:gap-4 min-h-[45vh] md:min-h-0`}>
         {/* Canvas controls */}
         <div className="flex items-center justify-between gap-3 bg-[#252526] border border-[#3e3e42] rounded-md px-3 py-2">
           <div className="flex items-center gap-3">
@@ -1879,14 +1892,21 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
         </div>
       </div>
 
-      {/* RIGHT LAYERS & PROPERTIES PANEL (mobile: bottom sheet area) */}
-      <div className="order-3 md:order-3 w-full md:w-80 bg-[#252526] border-t md:border-t-0 md:border-l border-[#3e3e42] flex flex-col md:h-[70vh] flex-1 min-h-0">
+      {/* Layers & Properties Panel (mobile: bottom sheet area). Position (left/right) is toggleable */}
+      <div className={`order-3 ${panelOnLeft ? 'md:order-2' : 'md:order-3'} w-full md:w-1/4 bg-[#252526] border-t md:border-t-0 ${panelOnLeft ? 'md:border-r' : 'md:border-l'} border-[#3e3e42] flex flex-col md:h-[70vh] md:flex-none min-h-0`}>
         <div className="p-4 border-b border-[#3e3e42] flex justify-between items-center bg-[#2d2d30]">
           <h2 className="font-semibold text-sm text-gray-200">Layers</h2>
           <div className="flex gap-2">
             <button className="p-1 hover:bg-[#3e3e42] rounded text-gray-400 hover:text-white" title="Align Left" onClick={() => alignElements('left')}><AlignLeft size={16}/></button>
             <button className="p-1 hover:bg-[#3e3e42] rounded text-gray-400 hover:text-white" title="Align Center" onClick={() => alignElements('center')}><AlignCenter size={16}/></button>
             <button className="p-1 hover:bg-[#3e3e42] rounded text-gray-400 hover:text-white" title="Align Right" onClick={() => alignElements('right')}><AlignRight size={16}/></button>
+            <button
+              className="p-1 hover:bg-[#3e3e42] rounded text-gray-400 hover:text-white"
+              title={panelOnLeft ? 'Move panel to right' : 'Move panel to left'}
+              onClick={() => setPanelOnLeft((s) => !s)}
+            >
+              {panelOnLeft ? '➡' : '⬅'}
+            </button>
           </div>
         </div>
 
@@ -2924,7 +2944,7 @@ const ToolButton = ({ icon, onClick, active, label, disabled }: any) => (
     onClick={onClick}
     disabled={disabled}
     className={`
-      w-10 h-10 rounded-md flex items-center justify-center transition-colors relative group
+      w-12 h-12 rounded-md flex items-center justify-center transition-colors relative group
       ${active ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-[#3e3e42] hover:text-white'}
       ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
     `}

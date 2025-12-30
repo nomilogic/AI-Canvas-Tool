@@ -968,6 +968,7 @@ export async function generateLayout(
   // Image binaries should be created separately (or via placeholders) to avoid breaking JSON parsing.
   // Per project requirement: use only Flash for layout JSON (no Pro / Vision).
  const modelsToTry = [
+  "gemini-2.5-flash-preview-09-2025", // Preview (Sep 2025): Improved layout generation
    "gemini-3-flash", // Latest (Dec 2025): PhD-level reasoning at Flash speed
    "gemini-3-pro", // Latest (Nov 2025): Best for complex math/coding
    "gemini-2.5-pro", // Stable: High reasoning for general tasks

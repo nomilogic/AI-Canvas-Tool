@@ -279,8 +279,28 @@ export default function CanvasTool() {
         elements,
         canvasSize.width,
         canvasSize.height,
-        { strategy: aiStrategy }
+        { strategy: aiStrategy },
+         htmlLayout
       );
+      console.log("AI generated elements:", newElements);
+      
+      // If AI returned raw HTML (string) — treat it as canonical HTML layout.
+      if (typeof newElements === 'string') {
+        try {
+          const normalizedHtml = ensureHtmlHasElementIds(newElements);
+          // Validate it can be parsed into elements for safety.
+          htmlToElements(normalizedHtml, canvasSize.width, canvasSize.height);
+          setHtmlLayout(normalizedHtml);
+          toast.success('AI returned HTML layout');
+          return;
+        } catch (e) {
+          console.error('Invalid HTML from AI:', e);
+          toast.error('AI returned invalid HTML');
+          return;
+        }
+      }
+
+
       const nextHtml = elementsToHtml(newElements, canvasSize);
       setHtmlLayout(nextHtml);
       toast.success(`AI (${config.provider}) updated the layout`);

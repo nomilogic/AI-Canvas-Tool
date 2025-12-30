@@ -9,6 +9,7 @@ import {
 } from "./template-ai";
 import { normalizeLayoutTree } from "./layout-tree";
 import callPuterChat from "../lib/puter-client";
+import html2canvas from "html2canvas";
 
 type GenerateLayoutOptions = { strategy?: AIGenerationStrategy };
 
@@ -80,18 +81,6 @@ Actions:
 Do NOT return a full TemplateElement[] array.`;
 
 // Puter-specific rule set: be strict about returning only elements/actions in our schema.
-const PUTER_ELEMENTS_SYSTEM_PROMPT = `You are a strict output-only assistant for a CANVAS design tool. When asked to generate layout elements, you MUST respond using ONE of the following formats ONLY (no extra text, no explanation):
-
-1) A JSON array of elements: [{...}, {...}]
-  - Each element must be an object with keys: id (optional), type ("text"|"image"|"shape"|"svg"|"icon"|"group"), x (px), y (px), width (px), height (px).
-  - Optional keys: name, rotation, zIndex, style (raw CSS string), opacity, shadow, filters, and type-specific fields (text -> content,fontSize,fontFamily,color; image -> src; svg -> content/viewBox; shape -> shape,color).
-  - Coordinates and sizes are in pixels. Use integers where possible.
-
-OR
-
-2) An actions object: { "actions": [ { "op": "create", "element": {...} }, { "op": "update", "id": "...", "patch": {...} }, { "op": "delete", "id": "..." } ] }
-
-If you must wrap the JSON in a code fence, use \`\`\`json ... \`\`\` and nothing else. Do NOT include markdown headings, explanations, or additional commentary. Always assume the canvas size will be provided as \`Canvas: {width}x{height}\` and use that coordinate space.`;
 
 export type AIProvider = "gemini" | "ollama" | "huggingface" | "groq" | "puter";
 
@@ -120,7 +109,8 @@ class AIService {
     currentElements: TemplateElement[],
     canvasWidth: number,
     canvasHeight: number,
-    options?: GenerateLayoutOptions
+    options?: GenerateLayoutOptions,
+    htmlLayout?: string,
   ): Promise<TemplateElement[]> {
     const systemPrompt = this.getSystemPrompt(prompt);
 
@@ -132,7 +122,9 @@ class AIService {
           currentElements,
           canvasWidth,
           canvasHeight,
-          options
+          options,
+          htmlLayout
+          
         );
       case "ollama":
         return this.generateWithOllama(
@@ -189,14 +181,55 @@ class AIService {
     currentElements: TemplateElement[],
     canvasWidth: number,
     canvasHeight: number,
-    options?: GenerateLayoutOptions
+    options?: GenerateLayoutOptions,
+    currentHtml?: string,
+
   ): Promise<TemplateElement[]> {
     if (!apiKey || apiKey.trim() === "") {
       throw new Error("Gemini API Key is missing. Please add it in Settings ⚙️");
     }
     const { generateLayout } = await import("./gemini");
     // Don't pass systemPrompt - let generateLayout use its own SYSTEM_PROMPT
-    return generateLayout(apiKey, userPrompt, currentElements, canvasWidth, canvasHeight, undefined, options);
+       const PUTER_ELEMENTS_SYSTEM_PROMPT = `You are a strict output-only assistant for a CANVAS design tool. When asked to generate layout elements, you MUST respond using ONE of the following formats ONLY (no extra text, no explanation):
+- Create a relative div with absolute divs inside
+- Don't use nested divs in absolute divs
+- Don't include html, body, or head tags
+- all elements must be absolutely positioned inside a single relative div
+- add id attributes to each absolute div for element identification
+- Play with coordinates using left, right, top, bottom properties
+- Can apply shadows, effects, gradients
+- Can use text
+- SVG(should be centered in div and scaled to fit inside the div properly), single div (as design element), or 
+- image (base64 in src) inside absolute divs
+- Size: ${canvasWidth}x${canvasHeight}px (exactly this canvas size)
+- Focus on visual impact, readability, and engagement
+- Use modern design principles: contrast, hierarchy, whitespace
+- create visually appealing layouts for marketing banners, social media posts, ads, etc.
+- add shapes, icons, images to enhance the design
+- dont't use flex/container layout or children nesting.
+- Coordinates are in PIXELS (top-left origin). All elements MUST fit within the canvas.
+- When updating, reference existing elements ONLY by the provided ids.
+
+Critical constraints (must follow):
+-HTML structure for the design (no explanations, no code blocks). The HTML should be a single div with position: relative containing absolutely positioned child elements.
+- dont use nested divs in absolute divs.
+- seprarate images and svgs into their own divs, text, don't use span or other tags create each element separately.
+- If modifying existing design, preserve elements and improve based on the request.
+- This tool is ABSOLUTE-POSITION CANVAS. Do NOT use flex/container layout or children nesting.
+- Coordinates are in PIXELS (top-left origin). All elements MUST fit within the canvas.
+- When updating, reference existing elements ONLY by the provided ids.
+
+Current HTML layout (modify this if it exists, or create new if empty):
+${currentHtml}
+
+User request: ${userPrompt}
+
+H
+Current HTML layout (modify this if it exists, or create new if empty):
+${currentHtml}
+
+User request: ${userPrompt} Return ONLY the complete HTML structure for the design (no explanations, no code blocks). The HTML should be a single div with position: relative containing absolutely positioned child elements. If modifying existing design, preserve good elements and improve based on the request.TML should be a single div with position: relative containing absolutely positioned child elements. If modifying existing design, preserve good elements and improve based on the request.`;
+    return generateLayout(apiKey, userPrompt, currentElements, canvasWidth, canvasHeight, PUTER_ELEMENTS_SYSTEM_PROMPT, options);
   }
 
   private async generateWithPuter(
@@ -205,15 +238,56 @@ class AIService {
     currentElements: TemplateElement[],
     canvasWidth: number,
     canvasHeight: number,
-    options?: GenerateLayoutOptions
+    options?: GenerateLayoutOptions,
+    currentHtml?: string,
   ): Promise<TemplateElement[]> {
         const strategy: AIGenerationStrategy = options?.strategy ?? "full";
+
+        const PUTER_ELEMENTS_SYSTEM_PROMPT = `You are a strict output-only assistant for a CANVAS design tool. When asked to generate layout elements, you MUST respond using ONE of the following formats ONLY (no extra text, no explanation):
+- Create a relative div with absolute divs inside
+- Don't use nested divs in absolute divs
+- Don't include html, body, or head tags
+- all elements must be absolutely positioned inside a single relative div
+- add id attributes to each absolute div for element identification
+- Play with coordinates using left, right, top, bottom properties
+- Can apply shadows, effects, gradients
+- Can use text
+- SVG(should be centered in div and scaled to fit inside the div properly), single div (as design element), or 
+- image (base64 in src) inside absolute divs
+- Size: ${canvasWidth}x${canvasHeight}px (exactly this canvas size)
+- Focus on visual impact, readability, and engagement
+- Use modern design principles: contrast, hierarchy, whitespace
+- create visually appealing layouts for marketing banners, social media posts, ads, etc.
+- add shapes, icons, images to enhance the design
+- dont't use flex/container layout or children nesting.
+- Coordinates are in PIXELS (top-left origin). All elements MUST fit within the canvas.
+- When updating, reference existing elements ONLY by the provided ids.
+
+Critical constraints (must follow):
+-HTML structure for the design (no explanations, no code blocks). The HTML should be a single div with position: relative containing absolutely positioned child elements.
+- dont use nested divs in absolute divs.
+- seprarate images and svgs into their own divs, text, don't use span or other tags create each element separately.
+- If modifying existing design, preserve elements and improve based on the request.
+- This tool is ABSOLUTE-POSITION CANVAS. Do NOT use flex/container layout or children nesting.
+- Coordinates are in PIXELS (top-left origin). All elements MUST fit within the canvas.
+- When updating, reference existing elements ONLY by the provided ids.
+
+Current HTML layout (modify this if it exists, or create new if empty):
+${currentHtml}
+
+User request: ${userPrompt}
+
+H
+Current HTML layout (modify this if it exists, or create new if empty):
+${currentHtml}
+
+User request: ${userPrompt} Return ONLY the complete HTML structure for the design (no explanations, no code blocks). The HTML should be a single div with position: relative containing absolutely positioned child elements. If modifying existing design, preserve good elements and improve based on the request.TML should be a single div with position: relative containing absolutely positioned child elements. If modifying existing design, preserve good elements and improve based on the request.`;
 
         // Determine model from localStorage (UI stores this in settings when enabling Puter)
         const model = (typeof window !== 'undefined' && localStorage.getItem('puter_model')) || 'claude-sonnet-4-5';
 
         const baseInstructions = strategy === 'schema' ? ACTIONS_PROVIDER_SYSTEM_PROMPT : systemPrompt;
-        const promptBody = `${PUTER_ELEMENTS_SYSTEM_PROMPT}\n${baseInstructions}\nCanvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(
+        const promptBody = `${PUTER_ELEMENTS_SYSTEM_PROMPT}\n\nCanvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(
           summarizeElementsForPrompt(currentElements)
         )}\n\nCommand: ${userPrompt}`;
 
@@ -244,11 +318,16 @@ class AIService {
           }
 
           // Also attempt to parse simple HTML snippets (Puter often returns HTML code fences)
-          const htmlLike = /<\/?(div|img)\b/i.test(content) || /```html/.test(content);
-          if (htmlLike) {
-            const parsed = parseHtmlElementsFromText(content, canvasWidth, canvasHeight);
-            if (parsed && parsed.length > 0) return parsed;
-          }
+          console.log("Puter content for HTML parsing:", content);
+          //const htmlLike = /<\/?(div|img)\b/i.test(content) || /```html/.test(content);
+          //if (htmlLike) {
+            const parsed =content.includes('```html')
+            ? content.split('```html')[1].split('```')[0].trim()
+            : content;
+            return parsed;
+            const parsedHtmlElements = parseHtmlElementsFromText(parsed, canvasWidth, canvasHeight);
+            if (parsedHtmlElements && parsedHtmlElements.length > 0) return parsedHtmlElements;
+          //}
 
           return currentElements;
         } catch (error) {
