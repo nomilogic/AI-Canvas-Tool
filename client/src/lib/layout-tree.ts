@@ -196,6 +196,9 @@ function flattenLayoutTree(
           ...(base as any),
           type: "svg",
           content: (node as any).content ?? (node as any).d ?? "",
+          // Preserve any explicit viewBox provided by the AI/tool so scaling
+          // matches the original icon or illustration.
+          viewBox: (node as any).viewBox,
           fill: (node as any).fill,
           stroke: (node as any).stroke,
           strokeWidth: (node as any).strokeWidth,

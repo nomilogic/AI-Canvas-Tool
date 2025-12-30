@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { testConnection } from '../../lib/gemini';
+import callPuterChat from '../../lib/puter-client';
 import { toast } from 'sonner';
 
 interface ApiKeyModalProps {
@@ -24,10 +25,24 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ apiKey, onSave }) => {
   const [value, setValue] = useState(apiKey);
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [puterEnabled, setPuterEnabled] = useState<boolean>(() => localStorage.getItem('puter_enabled') === '1');
+  const [puterModel, setPuterModel] = useState<string>(() => localStorage.getItem('puter_model') || 'claude-sonnet-4-5');
+  const [puterStreaming, setPuterStreaming] = useState<boolean>(() => localStorage.getItem('puter_stream') === '1');
+  const [puterStatus, setPuterStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
 
   const handleSave = () => {
     onSave(value);
     setOpen(false);
+    // Persist Puter settings locally
+    if (puterEnabled) {
+      localStorage.setItem('puter_enabled', '1');
+      localStorage.setItem('puter_model', puterModel);
+      localStorage.setItem('puter_stream', puterStreaming ? '1' : '0');
+    } else {
+      localStorage.removeItem('puter_enabled');
+      localStorage.removeItem('puter_model');
+      localStorage.removeItem('puter_stream');
+    }
   };
 
   const handleTest = async () => {
@@ -44,6 +59,23 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ apiKey, onSave }) => {
       }
     } catch (e) {
       setStatus('error');
+    }
+  };
+
+  const handlePuterTest = async () => {
+    if (!puterEnabled) return;
+    setPuterStatus('testing');
+    try {
+      const resp = await callPuterChat('Say hi', { model: puterModel, stream: false });
+      // puter response shape: resp.message.content[0].text
+      const text = resp?.message?.content?.[0]?.text ?? JSON.stringify(resp);
+      setPuterStatus('success');
+      toast.success('Puter response received');
+      console.log('Puter test response:', text);
+    } catch (e) {
+      console.error('Puter test failed', e);
+      setPuterStatus('error');
+      toast.error('Puter test failed — check console for details');
     }
   };
 
@@ -105,6 +137,45 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ apiKey, onSave }) => {
                     If you added a secret, make sure it is named <code className="bg-white/10 px-1 rounded">VITE_GEMINI_API_KEY</code> to be detected automatically.
                   </span>
               )}
+            </p>
+          </div>
+
+          {/* Puter (Claude Sonnet) options */}
+          <div className="grid w-full items-center gap-1.5 pt-2 border-t border-white/6">
+            <Label className="text-white/80">Puter / Claude (client-side)</Label>
+            <div className="flex items-center gap-3">
+              <label className="inline-flex items-center gap-2">
+                <input type="checkbox" checked={puterEnabled} onChange={(e) => setPuterEnabled(e.target.checked)} className="h-4 w-4" />
+                <span className="text-xs">Enable Puter (Claude Sonnet via CDN / client)</span>
+              </label>
+              <button onClick={handlePuterTest} disabled={!puterEnabled || puterStatus === 'testing'} className={`px-2 py-1 rounded text-xs ${puterStatus === 'success' ? 'bg-green-600 text-white' : 'bg-white/5 text-white/70 hover:bg-white/10'}`}>
+                {puterStatus === 'testing' ? 'Testing...' : 'Test'}
+              </button>
+            </div>
+
+            {puterEnabled && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <span className="text-xs text-gray-500 block mb-1">Model</span>
+                  <select value={puterModel} onChange={(e) => setPuterModel(e.target.value)} className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm">
+                    <option value="claude-sonnet-4-5">claude-sonnet-4-5</option>
+                    <option value="claude-opus-4-5">claude-opus-4-5</option>
+                    <option value="claude-haiku-4-5">claude-haiku-4-5</option>
+                  </select>
+                </div>
+
+                <div>
+                  <span className="text-xs text-gray-500 block mb-1">Streaming</span>
+                  <label className="inline-flex items-center gap-2">
+                    <input type="checkbox" checked={puterStreaming} onChange={(e) => setPuterStreaming(e.target.checked)} className="h-4 w-4" />
+                    <span className="text-xs text-gray-400">Enable streaming (for long responses)</span>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            <p className="text-xs text-white/40">
+              Puter is a client-side access layer to Anthropic Claude. It uses a user-pays model (no server API key required). Enabling it will allow the client to call Claude directly via Puter.js — be sure users understand any usage or billing implications.
             </p>
           </div>
         </div>

@@ -210,16 +210,40 @@ export default function CanvasTool() {
 
   const handleExportPng = async () => {
     try {
-      const node = canvasDomRef.current;
-      if (!node) {
-        toast.error('Canvas not ready for export');
+      // Use a clean offscreen snapshot of the HTML canvas so exports are not
+      // affected by zoom/pan transforms or selection handles.
+      if (!htmlLayout) {
+        toast.error('Nothing to export');
         return;
       }
-      const canvas = await html2canvas(node, {
+
+      const offscreen = document.createElement('div');
+      offscreen.style.position = 'fixed';
+      offscreen.style.left = '-10000px';
+      offscreen.style.top = '0';
+      offscreen.style.zIndex = '-1';
+      offscreen.style.pointerEvents = 'none';
+      document.body.appendChild(offscreen);
+
+      const frame = document.createElement('div');
+      frame.style.width = `${canvasSize.width}px`;
+      frame.style.height = `${canvasSize.height}px`;
+      frame.style.boxSizing = 'content-box';
+      frame.style.background = '#ffffff';
+      frame.style.overflow = 'hidden';
+      frame.className = 'export-canvas-frame';
+      frame.innerHTML = htmlLayout;
+
+      offscreen.appendChild(frame);
+
+      const canvas = await html2canvas(frame, {
         useCORS: true,
-        backgroundColor: null,
+        backgroundColor: '#ffffff',
         scale: 2,
       });
+
+      document.body.removeChild(offscreen);
+
       const dataUrl = canvas.toDataURL('image/png');
       const link = document.createElement('a');
       link.href = dataUrl;

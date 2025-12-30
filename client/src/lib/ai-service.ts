@@ -2,10 +2,13 @@ import type { TemplateElement } from "../types/templates";
 import {
   applyAiActions,
   normalizeAiOutput,
+  parseHtmlElementsFromText,
+  parseJsonElementsFromText,
   type AIGenerationStrategy,
   type AiActionsResponse,
 } from "./template-ai";
 import { normalizeLayoutTree } from "./layout-tree";
+import callPuterChat from "../lib/puter-client";
 
 type GenerateLayoutOptions = { strategy?: AIGenerationStrategy };
 
@@ -76,7 +79,21 @@ Actions:
 - { op: "delete", id: string }
 Do NOT return a full TemplateElement[] array.`;
 
-export type AIProvider = "gemini" | "ollama" | "huggingface" | "groq";
+// Puter-specific rule set: be strict about returning only elements/actions in our schema.
+const PUTER_ELEMENTS_SYSTEM_PROMPT = `You are a strict output-only assistant for a CANVAS design tool. When asked to generate layout elements, you MUST respond using ONE of the following formats ONLY (no extra text, no explanation):
+
+1) A JSON array of elements: [{...}, {...}]
+  - Each element must be an object with keys: id (optional), type ("text"|"image"|"shape"|"svg"|"icon"|"group"), x (px), y (px), width (px), height (px).
+  - Optional keys: name, rotation, zIndex, style (raw CSS string), opacity, shadow, filters, and type-specific fields (text -> content,fontSize,fontFamily,color; image -> src; svg -> content/viewBox; shape -> shape,color).
+  - Coordinates and sizes are in pixels. Use integers where possible.
+
+OR
+
+2) An actions object: { "actions": [ { "op": "create", "element": {...} }, { "op": "update", "id": "...", "patch": {...} }, { "op": "delete", "id": "..." } ] }
+
+If you must wrap the JSON in a code fence, use ```json ... ``` and nothing else. Do NOT include markdown headings, explanations, or additional commentary. Always assume the canvas size will be provided as `Canvas: {width}x{height}` and use that coordinate space.`;
+
+export type AIProvider = "gemini" | "ollama" | "huggingface" | "groq" | "puter";
 
 export interface AIConfig {
   provider: AIProvider;
@@ -108,6 +125,15 @@ class AIService {
     const systemPrompt = this.getSystemPrompt(prompt);
 
     switch (this.config.provider) {
+      case "puter":
+        return this.generateWithPuter(
+          systemPrompt,
+          prompt,
+          currentElements,
+          canvasWidth,
+          canvasHeight,
+          options
+        );
       case "ollama":
         return this.generateWithOllama(
           systemPrompt,
@@ -173,6 +199,63 @@ class AIService {
     return generateLayout(apiKey, userPrompt, currentElements, canvasWidth, canvasHeight, undefined, options);
   }
 
+  private async generateWithPuter(
+    systemPrompt: string,
+    userPrompt: string,
+    currentElements: TemplateElement[],
+    canvasWidth: number,
+    canvasHeight: number,
+    options?: GenerateLayoutOptions
+  ): Promise<TemplateElement[]> {
+        const strategy: AIGenerationStrategy = options?.strategy ?? "full";
+
+        // Determine model from localStorage (UI stores this in settings when enabling Puter)
+        const model = (typeof window !== 'undefined' && localStorage.getItem('puter_model')) || 'claude-sonnet-4-5';
+
+        const baseInstructions = strategy === 'schema' ? ACTIONS_PROVIDER_SYSTEM_PROMPT : systemPrompt;
+        const promptBody = `${PUTER_ELEMENTS_SYSTEM_PROMPT}\n${baseInstructions}\nCanvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(
+          summarizeElementsForPrompt(currentElements)
+        )}\n\nCommand: ${userPrompt}`;
+
+        try {
+          const resp: any = await callPuterChat(promptBody, { model, stream: false });
+          // Puter responses may nest the message in different places depending on SDK/format.
+          // Handle both `resp.message.content[0].text` and `resp.result.message.content[0].text`.
+          const content =
+            resp?.message?.content?.[0]?.text ?? resp?.result?.message?.content?.[0]?.text ?? String(resp ?? "");
+
+          if (strategy === 'schema') {
+            const obj = JSON.parse(extractJsonObject(content)) as AiActionsResponse;
+            const actions = Array.isArray((obj as any)?.actions) ? (obj as any).actions : [];
+            return applyAiActions(currentElements, actions, canvasWidth, canvasHeight, userPrompt);
+          }
+
+          // Try JSON parsing first (includes ```json code fences or bare objects/arrays)
+          const parsedJson = parseJsonElementsFromText(content, canvasWidth, canvasHeight);
+          if (parsedJson && parsedJson.length > 0) return parsedJson;
+
+          // Try to parse an array-style response (layout tree)
+          const jsonMatch = content.match(/\[[\s\S]*\]/);
+          if (jsonMatch) {
+            const raw = JSON.parse(jsonMatch[0]);
+            const fromTree = normalizeLayoutTree(raw, canvasWidth, canvasHeight);
+            if (fromTree.length > 0) return fromTree;
+            return normalizeAiOutput(raw, canvasWidth, canvasHeight);
+          }
+
+          // Also attempt to parse simple HTML snippets (Puter often returns HTML code fences)
+          const htmlLike = /<\/?(div|img)\b/i.test(content) || /```html/.test(content);
+          if (htmlLike) {
+            const parsed = parseHtmlElementsFromText(content, canvasWidth, canvasHeight);
+            if (parsed && parsed.length > 0) return parsed;
+          }
+
+          return currentElements;
+        } catch (error) {
+          console.error('Puter generation error', error);
+          return currentElements;
+        }
+    }
   private async generateWithOllama(
     systemPrompt: string,
     userPrompt: string,

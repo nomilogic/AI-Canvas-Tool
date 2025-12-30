@@ -119,6 +119,7 @@ export const AIModelSelector = () => {
               <option value="ollama">Ollama (Free - Local)</option>
               <option value="huggingface">HuggingFace (Free - Requires API Key)</option>
               <option value="groq">Groq (Free - Requires API Key)</option>
+              <option value="puter">Puter / Claude (Free - Client-side User-Pays)</option>
             </select>
             <p className="text-xs text-gray-500 mt-1">Switch between different AI models</p>
           </div>
@@ -240,6 +241,13 @@ export const AIModelSelector = () => {
                   <li>✓ No credit card required</li>
                 </>
               )}
+              {config.provider === 'puter' && (
+                <>
+                  <li>✓ Client-side access to Anthropic Claude (via Puter.js)</li>
+                  <li>✓ No API key required (user-pays model)</li>
+                  <li>✓ Quick for prototyping and demos; consider server proxy for production</li>
+                </>
+              )}
             </ul>
           </div>
 
@@ -268,6 +276,20 @@ export const AIModelSelector = () => {
                       toast.success("✓ Gemini API connection successful!");
                     } else {
                       toast.error("✗ Gemini API connection failed");
+                    }
+                  } else if (config.provider === 'puter') {
+                    try {
+                      const { default: callPuterChat } = await import('@/lib/puter-client');
+                      const model = localStorage.getItem('puter_model') || 'claude-sonnet-4-5';
+                      const resp: any = await callPuterChat('Say hi', { model });
+                      const text = resp?.message?.content?.[0]?.text ?? '';
+                      if (text && text.length > 0) {
+                        toast.success('✓ Puter / Claude connection successful!');
+                      } else {
+                        toast.error('✗ Puter returned no text');
+                      }
+                    } catch (err: any) {
+                      toast.error(`✗ Puter test failed: ${err?.message ?? String(err)}`);
                     }
                   } else if (config.provider === "ollama") {
                     const response = await fetch(`${config.ollamaUrl || "http://localhost:11434"}/api/tags`);

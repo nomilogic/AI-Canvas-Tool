@@ -138,7 +138,10 @@ export function elementsToHtml(
             }`
           : "";
         const d = svg.content || "";
-        return `<svg data-el-id="${el.id}" viewBox="0 0 100 100" style="${svgStyle.join(";")}">
+        const viewBox = svg.viewBox && svg.viewBox.trim().length > 0 ? svg.viewBox : "0 0 100 100";
+        const w = Math.max(1, Math.round(el.width));
+        const h = Math.max(1, Math.round(el.height));
+        return `<svg data-el-id="${el.id}" viewBox="${viewBox}" width="${w}" height="${h}" style="${svgStyle.join(";")}">
   <path d="${d}" fill="${fill}"${strokeAttrs}></path>
 </svg>`;
       }
@@ -269,6 +272,44 @@ export function updateHtmlTextContent(
   const el = container.querySelector<HTMLElement>(`[data-el-id="${id}"]`);
   if (!el) return html;
   el.textContent = text;
+  return container.innerHTML;
+}
+
+/**
+ * Update the primary <path> d attribute and/or viewBox for a given SVG element id.
+ * This lets the editor offer a simple "SVG code" textarea without regenerating
+ * the entire HTML tree from TemplateElements.
+ */
+export function updateHtmlSvgContent(
+  html: string,
+  id: string,
+  options: { d?: string; viewBox?: string | null },
+): string {
+  if (!html || typeof document === "undefined") return html;
+  const container = document.createElement("div");
+  container.innerHTML = stripScripts(html);
+
+  const svg = container.querySelector<SVGElement>(`svg[data-el-id="${id}"]`);
+  if (!svg) return html;
+
+  if (Object.prototype.hasOwnProperty.call(options, "viewBox")) {
+    const vb = options.viewBox;
+    if (vb && vb.trim().length > 0) {
+      svg.setAttribute("viewBox", vb);
+    } else {
+      svg.removeAttribute("viewBox");
+    }
+  }
+
+  if (typeof options.d === "string") {
+    let path = svg.querySelector("path");
+    if (!path) {
+      path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      svg.appendChild(path);
+    }
+    path.setAttribute("d", options.d);
+  }
+
   return container.innerHTML;
 }
 
@@ -408,13 +449,15 @@ function parseAbsoluteHtmlToTemplateElements(
             src,
           } as any;
           result.push(logoEl);
-        } else if (tag === "svg") {
+      } else if (tag === "svg") {
           const path = anyEl.querySelector("path");
           const d = path?.getAttribute("d") || "";
           const fill = path?.getAttribute("fill") || undefined;
           const stroke = path?.getAttribute("stroke") || undefined;
           const strokeWidthAttr = path?.getAttribute("stroke-width");
           const strokeWidth = strokeWidthAttr ? parseFloat(strokeWidthAttr) : undefined;
+          const viewBoxAttr = (anyEl.getAttribute("viewBox") || anyEl.getAttribute("viewbox") || "") as string;
+          const viewBox = viewBoxAttr && viewBoxAttr.trim().length > 0 ? viewBoxAttr : undefined;
           const svgEl: TemplateElement = {
             id,
             name: "SVG",
@@ -429,6 +472,7 @@ function parseAbsoluteHtmlToTemplateElements(
             opacity,
             // @ts-expect-error - svg specific props
             content: d,
+            viewBox,
             fill,
             stroke,
             strokeWidth,

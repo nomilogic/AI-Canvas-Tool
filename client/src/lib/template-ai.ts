@@ -584,6 +584,197 @@ export function normalizeAiOutput(
   return renumberZIndex(sorted.map(ensureImageSrc));
 }
 
+/**
+ * Attempts to extract simple HTML elements (e.g. <div style="left:0px;top:0px;width:100px;height:100px;background-color:#333;">)
+ * from an arbitrary text blob and convert them into basic TemplateElement shapes so the
+ * editor can render Puter/Claude HTML snippets directly.
+ */
+export function parseHtmlElementsFromText(
+  text: string,
+  canvasWidth: number,
+  canvasHeight: number,
+): TemplateElement[] {
+  if (!text || typeof text !== "string") return [];
+
+  // Unwrap code fences like ```html ... ```
+  const unwrapped = text.replace(/```[a-zA-Z-]*\n?([\s\S]*?)```/g, "$1").trim();
+
+  const out: TemplateElement[] = [];
+
+  function parseCssValue(val: string | undefined, axis: "x" | "y" | "w" | "h") {
+    if (!val) return undefined;
+    const s = val.trim();
+    const px = s.match(/^(-?[0-9.]+)px$/i);
+    if (px) return Number(px[1]);
+    const pct = s.match(/^(-?[0-9.]+)%$/i);
+    if (pct) {
+      const n = Number(pct[1]) / 100;
+      return axis === "w" || axis === "x" ? Math.round(n * canvasWidth) : Math.round(n * canvasHeight);
+    }
+    const num = Number(s.replace(/[^0-9.-]/g, ""));
+    return Number.isFinite(num) ? num : undefined;
+  }
+
+  // Simple <div> detection
+  const divRe = /<div\b([^>]*)>([\s\S]*?)<\/div>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = divRe.exec(unwrapped))) {
+    const attrs = m[1] || "";
+    // style attribute
+    const styleMatch = attrs.match(/style\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+    const style = (styleMatch && (styleMatch[1] || styleMatch[2])) || "";
+    const styleMap: Record<string, string> = {};
+    style.split(";").map((s) => s.trim()).filter(Boolean).forEach((pair) => {
+      const [k, v] = pair.split(":").map((x) => x && x.trim());
+      if (k && v) styleMap[k.toLowerCase()] = v;
+    });
+
+    const left = parseCssValue(styleMap["left"], "x") ?? 0;
+    const top = parseCssValue(styleMap["top"], "y") ?? 0;
+    const width = parseCssValue(styleMap["width"], "w") ?? 100;
+    const height = parseCssValue(styleMap["height"], "h") ?? 100;
+    const bg = styleMap["background-color"] ?? styleMap["background"] ?? undefined;
+
+    const el: any = {
+      id: crypto.randomUUID(),
+      type: "shape",
+      name: "Box",
+      x: left,
+      y: top,
+      width,
+      height,
+      zIndex: 0,
+    };
+
+    if (bg) el.color = bg;
+    if (styleMap["opacity"]) {
+      const op = parseFloat(styleMap["opacity"] as string);
+      if (!Number.isNaN(op)) el.opacity = op;
+    }
+
+    out.push(el as TemplateElement);
+  }
+
+  // <img src=...> detection
+  const imgRe = /<img\b([^>]*?)\/>/gi;
+  while ((m = imgRe.exec(unwrapped))) {
+    const attrs = m[1] || "";
+    const srcMatch = attrs.match(/src\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+    const src = srcMatch ? srcMatch[1] || srcMatch[2] || srcMatch[3] : undefined;
+    const styleMatch = attrs.match(/style\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+    const style = (styleMatch && (styleMatch[1] || styleMatch[2])) || "";
+    const styleMap: Record<string, string> = {};
+    style.split(";").map((s) => s.trim()).filter(Boolean).forEach((pair) => {
+      const [k, v] = pair.split(":").map((x) => x && x.trim());
+      if (k && v) styleMap[k.toLowerCase()] = v;
+    });
+
+    const left = parseCssValue(styleMap["left"], "x") ?? 0;
+    const top = parseCssValue(styleMap["top"], "y") ?? 0;
+    const width = parseCssValue(styleMap["width"], "w") ?? 100;
+    const height = parseCssValue(styleMap["height"], "h") ?? 100;
+
+    const imgEl: any = {
+      id: crypto.randomUUID(),
+      type: "image",
+      name: "Image",
+      x: left,
+      y: top,
+      width,
+      height,
+      zIndex: 0,
+      src: src || undefined,
+    };
+
+    out.push(imgEl as TemplateElement);
+  }
+
+  return normalizeAiOutput(out, canvasWidth, canvasHeight);
+}
+
+/**
+ * Extracts any JSON object/array from a text blob (including ```json code fences),
+ * coerces provider-specific element shapes (e.g., type: 'box', snake_case fields) into
+ * our internal shape, and returns normalized TemplateElement[]
+ */
+export function parseJsonElementsFromText(
+  text: string,
+  canvasWidth: number,
+  canvasHeight: number,
+): TemplateElement[] {
+  if (!text || typeof text !== "string") return [];
+
+  const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+  const start = cleaned.indexOf("{");
+  const arrStart = cleaned.indexOf("[");
+  const startIdx = start === -1 ? arrStart : start;
+  if (startIdx === -1) return [];
+
+  const end = cleaned.lastIndexOf("}");
+  const arrEnd = cleaned.lastIndexOf("]");
+  const endIdx = Math.max(end, arrEnd);
+  if (endIdx === -1 || endIdx < startIdx) return [];
+
+  const jsonText = cleaned.slice(startIdx, endIdx + 1);
+
+  try {
+    const parsed = JSON.parse(jsonText);
+    let nodes: any[] = [];
+    if (Array.isArray(parsed)) nodes = parsed;
+    else if ((parsed as any)?.elements && Array.isArray((parsed as any).elements)) nodes = (parsed as any).elements;
+    else if ((parsed as any).actions) return []; // actions handled elsewhere
+    else nodes = [parsed];
+
+    const coerced = nodes.map((n) => coercePuterElement(n));
+    return normalizeAiOutput(coerced, canvasWidth, canvasHeight);
+  } catch (err) {
+    return [];
+  }
+}
+
+function coercePuterElement(raw: any): any {
+  if (!raw || typeof raw !== "object") return raw;
+
+  const out: any = { ...raw };
+
+  // Normalize snake_case -> camelCase for known keys
+  if (out.fill_color && !out.color) out.color = out.fill_color;
+  if (out.fill && !out.color) out.color = out.fill;
+  if (out.background && !out.color) out.color = out.background;
+  if (out.stroke_color && !out.borderColor) out.borderColor = out.stroke_color;
+  if (out.stroke && !out.borderColor) out.borderColor = out.stroke;
+  if (out.stroke_width && !out.borderWidth) out.borderWidth = out.stroke_width;
+  if (out.font_size && !out.fontSize) out.fontSize = out.font_size;
+  if (out.font_family && !out.fontFamily) out.fontFamily = out.font_family;
+
+  // Convert 'box' / 'rect' / 'rectangle' to our 'shape' rectangle
+  if (out.type === "box" || out.type === "rect" || out.type === "rectangle") {
+    out.type = "shape";
+    out.shape = out.shape || "rectangle";
+    if (!out.color && out.fill) out.color = out.fill;
+    if (!out.color && out.fill_color) out.color = out.fill_color;
+  }
+
+  // Map legacy keys for text
+  if (out.type === "text") {
+    out.content = out.content ?? out.text ?? out.caption ?? out.label;
+  }
+
+  // Ensure numeric geometry coercion
+  ["x", "y", "width", "height", "rotation", "zIndex"].forEach((k) => {
+    if (out[k] !== undefined) {
+      const n = Number(out[k]);
+      if (!Number.isNaN(n)) out[k] = n;
+    }
+  });
+
+  // Provide defaults for width/height if missing
+  if (out.width === undefined) out.width = 100;
+  if (out.height === undefined) out.height = 100;
+
+  return out;
+}
+
 export type AIGenerationStrategy = "full" | "schema" | "html";
 
 export type AiAction =

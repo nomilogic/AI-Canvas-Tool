@@ -74,7 +74,9 @@ export const CodeExporter: React.FC<CodeExporterProps> = ({ elements }) => {
             ? ` stroke=\"${stroke}\"${strokeWidth !== undefined ? ` strokeWidth={${strokeWidth}}` : ''}`
             : '';
 
-          return `${indent}<svg viewBox=\"0 0 100 100\" style={{ ${svgStyle.join(', ')} }}>
+          const viewBox = svg.viewBox && svg.viewBox.trim().length > 0 ? svg.viewBox : '0 0 100 100';
+
+          return `${indent}<svg viewBox=\"${viewBox}\" style={{ ${svgStyle.join(', ')} }}>
 ${indent}  <path d=\"${svg.content}\" fill=\"${fill}\"${strokeAttrs} />
 ${indent}</svg>`;
         }

@@ -94,7 +94,18 @@ export interface ShapeElement extends TemplateElement {
 
 export interface SvgElement extends TemplateElement {
   type: 'svg';
+  /**
+   * Raw path data (d attribute) for the primary SVG path.
+   * We intentionally keep this as a simple string so icons from tools
+   * like Figma or Lucide can be round-tripped without extra parsing.
+   */
   content: string;
+  /**
+   * Optional viewBox for the SVG. When present we preserve this instead of
+   * forcing a generic 0 0 100 100 box so scaling stays faithful to the
+   * original icon or illustration.
+   */
+  viewBox?: string;
   fill?: string;
   stroke?: string;
   strokeWidth?: number;
