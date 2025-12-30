@@ -12,6 +12,7 @@ import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
 import html2canvas from 'html2canvas';
 import { ApiKeyModal } from '../components/modals/ApiKeyModal';
+import ClaudeChatBox from '../components/ClaudeChatBox';
 
 const LAYOUTS_STORAGE_KEY = 'ai-layout-engine.layouts.v1';
 
@@ -31,6 +32,9 @@ export default function CanvasTool() {
     return localStorage.getItem('gemini_api_key') || import.meta.env.VITE_GEMINI_API_KEY || '';
   });
   const [jsonInput, setJsonInput] = useState('');
+
+  // Claude chat box visibility
+  const [isClaudeChatVisible, setIsClaudeChatVisible] = useState(false);
 
   // Canvas size comes from the editor (defaults to 16:9 preset).
   const [canvasSize, setCanvasSize] = useState({ width: 1280, height: 720 });
@@ -463,7 +467,7 @@ export default function CanvasTool() {
                 </div>
 
                 {/* HTML source editor on the right */}
-                <div className="w-[420px] h-full bg-[#1e1e1e] rounded-lg border border-white/10 flex flex-col shadow-2xl">
+                <div className="w-[420px]  bg-[#1e1e1e] rounded-lg border border-white/10 flex flex-col shadow-2xl">
                   <div className="p-3 border-b border-white/10 text-xs text-white/50 flex justify-between items-center">
                     <span>Editable HTML Layout</span>
                     <button onClick={handleHtmlUpdate} className="text-violet-400 hover:text-violet-300">Apply HTML</button>
@@ -471,7 +475,7 @@ export default function CanvasTool() {
                   <textarea
                     value={htmlLayout}
                     onChange={(e) => setHtmlLayout(e.target.value)}
-                    className="flex-1 bg-transparent p-4 font-mono text-xs text-blue-300 resize-none outline-none"
+                    className="flex-1 bg-transparent p-4 font-mono text-xs text-blue-300  outline-none"
                     spellCheck={false}
                   />
                 </div>
@@ -497,6 +501,7 @@ export default function CanvasTool() {
                       onAiSchemaModeChange={(next) => setAiStrategy(next ? 'schema' : 'full')}
                       onCanvasElementRefChange={(el) => { canvasDomRef.current = el; }}
                       onRegisterEditorActions={(actions) => { editorActionsRef.current = actions; }}
+                      onOpenClaudeChat={() => setIsClaudeChatVisible(true)}
                   />
               </div>
             )}
@@ -521,6 +526,12 @@ export default function CanvasTool() {
              <CommandBar onSubmit={handleCommand} isLoading={isProcessing} />
         </div>
       </main>
+
+      {/* Floating Claude Chat Box */}
+      {isClaudeChatVisible && (
+        <ClaudeChatBox onClose={() => setIsClaudeChatVisible(false)} />
+      )}
+
       <Toaster theme="dark" position="bottom-right" />
     </div>
   );

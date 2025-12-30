@@ -43,12 +43,13 @@ import {
   Shield,
   Star,
 } from "lucide-react";
-import { Reorder, useDragControls } from "framer-motion";
+import { Reorder, useDragControls, motion } from "framer-motion";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TemplateElement, TextElement, ShapeElement, SvgElement, LogoElement, GroupElement, IconElement, FilterProps, GradientProps, ShadowProps } from "../types/templates";
-import { updateHtmlForTransforms, updateHtmlRawStyle, deleteHtmlElementsById, updateHtmlTextContent, appendElementsToHtml, updateHtmlSvgContent } from "../lib/layout-html";
+import ClaudeChatBox from "./ClaudeChatBox";
+import { updateHtmlForTransforms, updateHtmlRawStyle, deleteHtmlElementsById, updateHtmlTextContent, appendElementsToHtml, updateHtmlSvgContent, elementsToHtml } from "../lib/layout-html";
 import AIModelSelector from "./AIModelSelector";
 import callPuterChat from "../lib/puter-client";
 import { toast } from "sonner";
@@ -143,7 +144,119 @@ interface ImageTemplateEditorProps {
   onCanvasElementRefChange?: (el: HTMLDivElement | null) => void;
   /** Allow parent (header) to trigger editor-level actions like undo/redo. */
   onRegisterEditorActions?: (actions: { undo: () => void; redo: () => void }) => void;
+  /** Callback to open Claude chat */
+  onOpenClaudeChat?: () => void;
 }
+
+interface LayerItemProps {
+  el: TemplateElement;
+  isSelected: boolean;
+  isOpen: boolean;
+  onSelect: () => void;
+  onToggleOpen: (nextOpen: boolean) => void;
+  onToggleVisibility: () => void;
+  onDelete: () => void;
+  onToggleLock: () => void;
+  onToggleSelected: (checked: boolean) => void;
+}
+
+const LayerItem: React.FC<LayerItemProps> = ({
+  el,
+  isSelected,
+  isOpen,
+  onSelect,
+  onToggleOpen,
+  onToggleVisibility,
+  onDelete,
+  onToggleLock,
+  onToggleSelected,
+}) => {
+  const dragControls = useDragControls();
+
+  return (
+    <Reorder.Item value={el} dragControls={dragControls} dragPropagation={false}>
+      <motion.div drag={false}>
+        <Accordion
+          type="single"
+          collapsible
+          className="w-full bg-[#333336] rounded-md overflow-hidden border border-[#3e3e42]"
+          value={isOpen ? "item-1" : ""}
+          onValueChange={(v) => {
+            const nextOpen = v === "item-1";
+            onToggleOpen(nextOpen);
+          }}
+        >
+          <AccordionItem value="item-1" className="border-0">
+            <div
+              className={`flex items-center px-2 py-2 gap-2 ${isSelected ? 'bg-[#3b82f6]/20' : 'hover:bg-[#3e3e42]'}`}
+              onClick={onSelect}
+            >
+              <div className="cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-300" onPointerDown={(e) => {
+                e.stopPropagation();
+                dragControls.start(e);
+              }}>
+                <GripVertical size={14} />
+              </div>
+
+              <label
+                className="flex items-center"
+                onClick={(e) => e.stopPropagation()}
+                title="Select layer"
+              >
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={(e) => onToggleSelected(e.target.checked)}
+                  className="h-4 w-4 accent-blue-600"
+                />
+              </label>
+              
+              <div className="flex-1 text-xs font-medium text-gray-200 truncate flex items-center gap-2">
+                {el.type === 'text' && <Type size={12} className="text-blue-400"/>}
+                {el.type === 'shape' && <Square size={12} className="text-green-400"/>}
+                {el.type === 'image' && <ImageIcon size={12} className="text-purple-400"/>}
+                {el.name || 'Untitled Layer'}
+              </div>
+
+              <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                 <button onClick={onToggleVisibility} className={`p-1 rounded hover:bg-[#4e4e52] ${el.visible === false ? 'text-gray-600' : 'text-gray-400'}`}>
+                   {el.visible === false ? <EyeOff size={14}/> : <Eye size={14}/>}
+                 </button>
+                 <button
+                   onClick={onDelete}
+                   className="p-1 rounded hover:bg-red-900/30 text-gray-400 hover:text-red-400"
+                   title="Delete layer"
+                 >
+                   <Trash2 size={14} />
+                 </button>
+                 <button onClick={onToggleLock} className={`p-1 rounded hover:bg-[#4e4e52] ${el.locked ? 'text-red-400' : 'text-gray-400'}`}>
+                   {el.locked ? <Lock size={14}/> : <Unlock size={14}/>}
+                 </button>
+                 <AccordionTrigger className="p-1 hover:bg-[#4e4e52] rounded text-gray-400 w-6 h-6 flex items-center justify-center" />
+              </div>
+            </div>
+
+            <AccordionContent className="bg-[#252526] p-4 border-t border-[#3e3e42]">
+              {/* Layer properties content - abbreviated for brevity */}
+              <div className="space-y-4">
+                <div>
+                  <span className="text-xs text-gray-500 block mb-1">Name</span>
+                  <input
+                    type="text"
+                    value={el.name || ''}
+                    onChange={(e) => {/* update name */}}
+                    className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"
+                  />
+                </div>
+                {/* More properties... */}
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
+      </motion.div>
+    </Reorder.Item>
+  );
+};
 
 export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({ 
   elements,
@@ -155,6 +268,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   onHtmlLayoutChange,
   onCanvasElementRefChange,
   onRegisterEditorActions,
+  onOpenClaudeChat,
 }) => {
   const canvasFrameRef = useRef<HTMLDivElement | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -276,11 +390,8 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   // Tools state
   const [activeTool, setActiveTool] = useState<string>('select');
 
-  // Puter / Claude (Ask Claude panel)
-  const [claudeOpen, setClaudeOpen] = useState(false);
-  const [claudePrompt, setClaudePrompt] = useState<string>("Describe an element...");
-  const [claudeResponse, setClaudeResponse] = useState<string | null>(null);
-  const [claudeLoading, setClaudeLoading] = useState<boolean>(false);
+  // Processing state for AI operations
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
 
   // Selection
   // - Canvas click selects a single layer.
@@ -310,6 +421,9 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     setHistoryStep((prevStep) => prevStep + 1);
     if (!options?.skipOnChange) {
       onChange(newElements); // Propagate change when we intentionally want to rebuild from elements
+      // Also update the HTML layout for z-index changes
+      const newHtml = elementsToHtml(newElements, canvasSize);
+      onHtmlLayoutChange?.(newHtml);
     }
   };
 
@@ -840,8 +954,11 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   // Layer Reorder (Drag & Drop)
   // UI requirement: "top layer" in the Layers panel = front-most on canvas.
   // Konva renders later items on top, so we keep zIndex increasing back -> front.
-  const handleReorder = (newOrderTopToBottom: TemplateElement[]) => {
-    const n = newOrderTopToBottom.length;
+  const handleReorder = (newOrderIdsTopToBottom: string[]) => {
+    const n = newOrderIdsTopToBottom.length;
+
+    // Find the elements in the new order
+    const newOrderTopToBottom = newOrderIdsTopToBottom.map(id => elements.find(el => el.id === id)!);
 
     // First item in the list should get the highest zIndex.
     const withZ = newOrderTopToBottom.map((el, idx) => ({
@@ -863,7 +980,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
         return { ...el, zIndex: maxZ + 1 };
       }
       return el;
-    });
+    }).sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0));
     addToHistory(newElements);
   };
 
@@ -875,7 +992,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
         return { ...el, zIndex: minZ - 1 };
       }
       return el;
-    });
+    }).sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0));
     addToHistory(newElements);
   };
 
@@ -1452,70 +1569,82 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
               Fit
             </button>
 
-            {/* Ask Claude popover */}
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className="px-3 py-1 text-xs rounded bg-[#6b21a8] hover:bg-[#7c3aed] text-white ml-2"
-                  title="Ask Claude"
-                >
-                  Ask Claude
-                </button>
-              </PopoverTrigger>
-              <PopoverContent side="bottom" align="end" className="w-80 bg-[#151515] border-[#2b2b2b] text-white p-3">
-                <div className="text-sm mb-2 font-medium">Ask Claude (Puter)</div>
-                <textarea value={claudePrompt} onChange={(e) => setClaudePrompt(e.target.value)} className="w-full bg-[#222] rounded px-2 py-1 text-sm text-white min-h-[80px]" />
-                <div className="flex items-center gap-2 mt-2">
-                  <button
-                    onClick={async () => {
-                      const enabled = localStorage.getItem('puter_enabled') === '1';
-                      if (!enabled) {
-                        toast.error('Puter is not enabled in Settings (⚙️)');
-                        return;
-                      }
-                      const model = localStorage.getItem('puter_model') || 'claude-sonnet-4-5';
-                      const stream = localStorage.getItem('puter_stream') === '1';
-                      setClaudeResponse(null);
-                      setClaudeLoading(true);
-                      try {
-                        if (stream) {
-                          const it: any = await callPuterChat(claudePrompt, { model, stream: true });
-                          let acc = '';
-                          for await (const part of it) {
-                            acc += part?.text ?? '';
-                            setClaudeResponse(acc);
-                          }
-                        } else {
-                          const resp: any = await callPuterChat(claudePrompt, { model, stream: false });
-                          const text = resp?.message?.content?.[0]?.text ?? JSON.stringify(resp);
-                          setClaudeResponse(text);
-                        }
-                        toast.success('Claude answered');
-                      } catch (err) {
-                        console.error('Claude call failed', err);
-                        toast.error('Claude call failed (see console)');
-                        setClaudeResponse('Error: see console');
-                      } finally {
-                        setClaudeLoading(false);
-                      }
-                    }}
-                    className="px-3 py-1 rounded bg-violet-600 hover:bg-violet-700 text-white text-sm"
-                    disabled={claudeLoading}
-                  >
-                    {claudeLoading ? 'Thinking…' : 'Send'}
-                  </button>
-                  <button onClick={() => { setClaudePrompt(''); setClaudeResponse(null); }} className="px-2 py-1 rounded bg-white/5 text-sm">Clear</button>
-                </div>
-                <div className="mt-3 text-xs text-white/60">
-                  <div className="font-semibold">Note</div>
-                  <div>Uses Puter.js (Claude). Puter is user-pays — enabling it will make client-side calls that may incur cost.</div>
-                </div>
-                <div className="mt-3 bg-[#0b0b0b] p-2 rounded text-sm max-h-40 overflow-auto">
-                  {claudeResponse ? <pre className="whitespace-pre-wrap text-sm">{claudeResponse}</pre> : <div className="text-xs text-white/40">No answer yet</div>}
-                </div>
-              </PopoverContent>
-            </Popover>
+            {/* Ask Claude button */}
+            <button
+              type="button"
+              className="px-3 py-1 text-xs rounded bg-[#6b21a8] hover:bg-[#7c3aed] text-white ml-2"
+              title="Open Claude Chat"
+              onClick={() => {
+                onOpenClaudeChat?.();
+              }}
+            >
+              Ask Claude
+            </button>
+
+            {/* Generate Design button */}
+            <button
+              type="button"
+              className="px-3 py-1 text-xs rounded bg-[#059669] hover:bg-[#047857] text-white ml-2"
+              title="Generate Design"
+              onClick={async () => {
+                const enabled = localStorage.getItem('puter_enabled') === '1';
+                if (!enabled) {
+                  toast.error('Puter is not enabled in Settings (⚙️)');
+                  return;
+                }
+
+                const prompt = window.prompt('Describe your design (thumbnail, cover, banner, etc.):', 'Create a stunning design for my video about [topic]');
+                if (!prompt) return;
+
+                setIsProcessing(true);
+                try {
+                  const newHtml = await AIService.generateDesign(prompt, htmlLayout, canvasSize.width, canvasSize.height);
+                  setHtmlLayout(newHtml);
+                  toast.success('Design generated successfully!');
+                } catch (error) {
+                  console.error('Design generation failed:', error);
+                  toast.error('Design generation failed');
+                } finally {
+                  setIsProcessing(false);
+                }
+              }}
+              disabled={isProcessing}
+            >
+              {isProcessing ? 'Generating...' : 'Generate Design'}
+            </button>
+
+            {/* Modify Design button */}
+            <button
+              type="button"
+              className="px-3 py-1 text-xs rounded bg-[#d97706] hover:bg-[#b45309] text-white ml-2"
+              title="Modify Current Design"
+              onClick={async () => {
+                const enabled = localStorage.getItem('puter_enabled') === '1';
+                if (!enabled) {
+                  toast.error('Puter is not enabled in Settings (⚙️)');
+                  return;
+                }
+
+                const prompt = window.prompt('How would you like to modify this design?', 'Make the text bigger and add more contrast');
+                if (!prompt) return;
+
+                setIsProcessing(true);
+                try {
+                  const modifyPrompt = `Modify this existing design: ${prompt}`;
+                  const newHtml = await AIService.generateDesign(modifyPrompt, htmlLayout, canvasSize.width, canvasSize.height);
+                  setHtmlLayout(newHtml);
+                  toast.success('Design modified successfully!');
+                } catch (error) {
+                  console.error('Design modification failed:', error);
+                  toast.error('Design modification failed');
+                } finally {
+                  setIsProcessing(false);
+                }
+              }}
+              disabled={isProcessing}
+            >
+              {isProcessing ? 'Modifying...' : 'Modify Design'}
+            </button>
           </div>
         </div>
 
@@ -1766,27 +1895,27 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
             <div className="text-center text-gray-500 text-sm py-10">No layers added</div>
           )}
           
-          <Reorder.Group axis="y" values={layerListElements} onReorder={handleReorder} className="space-y-1">
+          <Reorder.Group axis="y" values={layerListElements.map(el => el.id)} onReorder={handleReorder} className="space-y-1">
           {layerListElements.map((el) => {
             const isSelected = selectedIds.includes(el.id);
             const isOpen = openLayerIds.includes(el.id);
             
             return (
-              <Reorder.Item key={el.id} value={el}>
+              <Reorder.Item key={el.id} value={el.id}>
                 <Accordion
-                  type="single"
-                  collapsible
-                  className="w-full bg-[#333336] rounded-md overflow-hidden border border-[#3e3e42]"
-                  value={isOpen ? "item-1" : ""}
-                  onValueChange={(v) => {
-                    const nextOpen = v === "item-1";
-                    if (nextOpen) {
-                      setOpenLayerIds([el.id]);
-                    } else {
-                      setOpenLayerIds([]);
-                    }
-                  }}
-                >
+                    type="single"
+                    collapsible
+                    className="w-full bg-[#333336] rounded-md overflow-hidden border border-[#3e3e42]"
+                    value={isOpen ? "item-1" : ""}
+                    onValueChange={(v) => {
+                      const nextOpen = v === "item-1";
+                      if (nextOpen) {
+                        setOpenLayerIds([el.id]);
+                      } else {
+                        setOpenLayerIds([]);
+                      }
+                    }}
+                  >
                   <AccordionItem value="item-1" className="border-0">
                     <div
                       className={`flex items-center px-2 py-2 gap-2 ${isSelected ? 'bg-[#3b82f6]/20' : 'hover:bg-[#3e3e42]'}`}
@@ -1834,7 +1963,8 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                       </div>
                     </div>
 
-                    <AccordionContent className="bg-[#252526] p-4 border-t border-[#3e3e42]">
+                    <motion.div drag={false}>
+                      <AccordionContent className="bg-[#252526] p-4 border-t border-[#3e3e42]">
                       {/* Nested Properties for this specific layer */}
                       
                       {/* Layout */}
@@ -2771,6 +2901,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                       </div>
 
                     </AccordionContent>
+                    </motion.div>
                   </AccordionItem>
                 </Accordion>
               </Reorder.Item>

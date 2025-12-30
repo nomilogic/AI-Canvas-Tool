@@ -76,7 +76,6 @@ Allowed element types:
 - image (for bitmap/raster only - generate these when the user mentions image-like content: "image", "photo", "picture", "bitmap", etc.)
   - IMPORTANT: Every image element MUST include a non-empty "src" string.
   - If you cannot provide a real image URL or data URI, use a placeholder:
-    - "https://via.placeholder.com/{width}x{height}?text={ShortLabel}"
 - shape (for primitives like rectangles/circles/lines/stars/polygons)
 - svg (for custom SVG paths/illustrations - generate these when user asks for a shape like "create a star", "draw a checkmark", "make a circle")
 - icon (for Lucide icons)
@@ -92,7 +91,7 @@ Element type decision rule (IMPORTANT):
 SVG guidance (important):
 - When the user asks for an icon/symbol/object shape like "cup", "pencil", "camera", "home icon", etc, return type: "svg".
 - The field content MUST be SVG path data for a <path d="..."> (not an entire <svg> document). A single compound path is fine (multiple subpaths like "M...Z M...Z").
-- Use a 24x24 coordinate system for path data (like common icon sets). Keep coordinates roughly within 0..24.
+
 - For stroke-style icons: fill="none", stroke="<color>", strokeWidth=2.
 - For filled icons: fill="<color>", stroke="transparent".
 
@@ -194,17 +193,13 @@ OPTION 2: Use Data URLs with SVG (FAST & RELIABLE)
 - SVG is vector-based, scalable, and works great for illustrated content
 - Much faster than waiting for external API calls
 
-OPTION 3: Use Placeholder Services
-- For quick prototyping: https://via.placeholder.com/{width}x{height}/{color}
-- Example: "https://via.placeholder.com/200x200/ff0000" for red 200x200
-- Example: "https://via.placeholder.com/200x200/3b82f6/ffffff?text=Car" for blue with white text
+
 
 IMAGE GENERATION EXAMPLES:
 
 User says "Create a red car 200x200":
 Option 1 (Real image generation): Call image generation API → get URL
 Option 2 (SVG): Use type: "svg" with car drawing
-Option 3 (Placeholder): "https://via.placeholder.com/200x200/ff0000?text=Car"
 
 RECOMMENDED OUTPUT (using placeholder):
 {
@@ -852,7 +847,7 @@ Rules:
 - For circles use: { type: "shape", shape: "circle", color: "..." }.
 - For rectangles use: { type: "shape", shape: "rectangle", color: "..." }.
 - For text use: { type: "text", content: "...", color: "...", fontSize, fontFamily:"Inter", fontWeight, textAlign }.
-- For svg icons: output ONLY path data in content; use 24x24 coordinate system.
+- For svg icons: output ONLY path data in content;coordinate system.
 - Visual effects must follow schema: opacity (top-level 0..1), shadow (enabled/color/blur/opacity/offsetX/offsetY), gradient (text/shape only).
 - If the element is NOT an image and NOT text, it MUST be either type "shape" or type "svg".
 - Canvas constraint: NO element should exceed canvas bounds. If any element is outside bounds, reposition or resize it to fit.
@@ -972,16 +967,27 @@ export async function generateLayout(
   // NOTE: Even if the user asks for an "image", this function still expects the model to return JSON.
   // Image binaries should be created separately (or via placeholders) to avoid breaking JSON parsing.
   // Per project requirement: use only Flash for layout JSON (no Pro / Vision).
-  const modelsToTry = [
-    "gemini-2.5-flash",
-  ];
+ const modelsToTry = [
+   "gemini-3-flash", // Latest (Dec 2025): PhD-level reasoning at Flash speed
+   "gemini-3-pro", // Latest (Nov 2025): Best for complex math/coding
+   "gemini-2.5-pro", // Stable: High reasoning for general tasks
+   "gemini-2.5-flash", // Stable: Balanced speed and accuracy
+   "gemini-2.5-flash-lite", // Stable: High-volume, low-cost
+ ];
 
+  const config = {
+    tools: {
+      googleSearch: {},
+    },
+  };
   let lastError: any = null;
 
   for (const modelName of modelsToTry) {
     try {
       console.log(`Attempting to generate with model: ${modelName}`);
-      const model = genAI.getGenerativeModel({ model: modelName });
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+      });
       const promptLower = prompt.toLowerCase();
 
       const strategy: AIGenerationStrategy = options?.strategy ?? "full";

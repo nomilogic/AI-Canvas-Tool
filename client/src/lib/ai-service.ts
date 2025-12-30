@@ -91,7 +91,7 @@ OR
 
 2) An actions object: { "actions": [ { "op": "create", "element": {...} }, { "op": "update", "id": "...", "patch": {...} }, { "op": "delete", "id": "..." } ] }
 
-If you must wrap the JSON in a code fence, use ```json ... ``` and nothing else. Do NOT include markdown headings, explanations, or additional commentary. Always assume the canvas size will be provided as `Canvas: {width}x{height}` and use that coordinate space.`;
+If you must wrap the JSON in a code fence, use \`\`\`json ... \`\`\` and nothing else. Do NOT include markdown headings, explanations, or additional commentary. Always assume the canvas size will be provided as \`Canvas: {width}x{height}\` and use that coordinate space.`;
 
 export type AIProvider = "gemini" | "ollama" | "huggingface" | "groq" | "puter";
 
@@ -476,6 +476,70 @@ class AIService {
     } catch (error) {
       console.error("Groq generation error:", error);
       return currentElements;
+    }
+  }
+
+  async generateDesign(
+    userPrompt: string,
+    currentHtml: string,
+    canvasWidth: number = 1280,
+    canvasHeight: number = 720
+  ): Promise<string> {
+    const DESIGN_SYSTEM_PROMPT = `You are a professional graphic designer. Create stunning visual designs for various purposes.
+
+RULES FOR CREATION:
+- Create a relative div with absolute divs inside
+- Don't use multi-nested divs in absolute divs
+- Don't include html, body, or head tags
+- Play with coordinates using left, right, top, bottom properties
+- Can apply shadows, effects, gradients
+- Can use text, SVG(should be centered in div and scaled to fit inside the div properly), single div (as design element), or image (base64 in src) inside absolute divs
+- Size: ${canvasWidth}x${canvasHeight}px (exactly this canvas size)
+- Focus on visual impact, readability, and engagement
+- Use modern design principles: contrast, hierarchy, whitespace
+
+Current HTML layout (modify this if it exists, or create new if empty):
+${currentHtml}
+
+User request: ${userPrompt}
+
+Return ONLY the complete HTML structure for the design (no explanations, no code blocks). The HTML should be a single div with position: relative containing absolutely positioned child elements. If modifying existing design, preserve good elements and improve based on the request.`;
+
+    try {
+      const enabled = localStorage.getItem('puter_enabled') === '1';
+      if (!enabled) {
+        throw new Error('Puter is not enabled');
+      }
+
+      const model = localStorage.getItem('puter_model') || 'claude-sonnet-4-5';
+      const stream = localStorage.getItem('puter_stream') === '1';
+
+      let response: any;
+      if (stream) {
+        const it: any = await callPuterChat(DESIGN_SYSTEM_PROMPT, { model, stream: true });
+        let acc = '';
+        for await (const part of it) {
+          acc += part?.text ?? '';
+        }
+        response = acc;
+      } else {
+        response = await callPuterChat(DESIGN_SYSTEM_PROMPT, { model, stream: false });
+        const text = response?.message?.content?.[0]?.text ?? response?.result?.message?.content?.[0]?.text ?? String(response);
+        response = text;
+      }
+
+      // Clean up the response to extract just the HTML
+      let htmlResult = response;
+      if (htmlResult.includes('```html')) {
+        htmlResult = htmlResult.split('```html')[1].split('```')[0].trim();
+      } else if (htmlResult.includes('```')) {
+        htmlResult = htmlResult.split('```')[1].split('```')[0].trim();
+      }
+
+      return htmlResult;
+    } catch (error) {
+      console.error("Design generation error:", error);
+      return currentHtml; // Return original HTML on error
     }
   }
 }
