@@ -3,6 +3,7 @@ import type { TemplateElement } from "../types/templates";
 import {
   applyAiActions,
   normalizeAiOutput,
+  parseHtmlElementsFromText,
   type AIGenerationStrategy,
   type AiActionsResponse,
 } from "./template-ai";
@@ -988,6 +989,11 @@ export async function generateLayout(
       console.log(`Attempting to generate with model: ${modelName}`);
       const model = genAI.getGenerativeModel({
         model: modelName,
+         tools: [{
+        googleSearch: {},
+ // Empty object enables the tool with default settings
+      }],
+       
       });
       const promptLower = prompt.toLowerCase();
 
@@ -1002,9 +1008,9 @@ export async function generateLayout(
   <div style="position:absolute;left:56px;top:56px;width:208px;height:48px;color:#ffffff;font-size:20px;font-family:Inter;font-weight:600;display:flex;align-items:center;justify-content:center;text-align:center;">
     Hero Title
   </div>
-  <img src=\"https://via.placeholder.com/260x160\" alt=\"Image\" style=\"position:absolute;left:320px;top:80px;width:260px;height:160px;object-fit:cover;border-radius:18px;\" />
+  <img src=\"" alt=\"Image\" style=\"position:absolute;left:320px;top:80px;width:260px;height:160px;object-fit:cover;border-radius:18px;\" />
   <div style=\"position:absolute;left:620px;top:120px;width:80px;height:80px;background:#3b82f6;border-radius:9999px;\"></div>
-  <svg viewBox=\"0 0 24 24\" style=\"position:absolute;left:640px;top:136px;width:40px;height:40px;\">\r\n    <path d=\"M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z\" fill=\"#ffffff\" />\r\n  </svg>
+  <svg viewBox=\"0 0 24 24\" stye=\"position:absolute;left:640px;top:136px;width:40px;height:40px;\">\r\n    <path d=\"M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z\" fill=\"#ffffff\" />\r\n  </svg>
 </div>`;
 
         const htmlContext = `
@@ -1030,9 +1036,15 @@ TASK:
 
         const htmlResult = await model.generateContent([htmlContext]);
         const htmlText = htmlResult.response.text();
-        const parsed = parseAbsoluteHtmlToTemplateElements(htmlText, canvasWidth, canvasHeight);
-        if (parsed.length > 0) {
-          return parsed;
+
+        // Prefer the text-based parser (works in Node and browser and understands gradients/SVG)
+        let parsed = parseHtmlElementsFromText(htmlText, canvasWidth, canvasHeight);
+        if (parsed.length > 0) return parsed;
+
+        // Fallback to DOM-based parser when running in a browser for better fidelity
+        if (typeof document !== "undefined") {
+          const domParsed = parseAbsoluteHtmlToTemplateElements(htmlText, canvasWidth, canvasHeight);
+          if (domParsed.length > 0) return domParsed;
         }
         // Fallback: if parsing fails, continue to normal JSON pipeline below.
       }
