@@ -162,7 +162,8 @@ class AIService {
           currentElements,
           canvasWidth,
           canvasHeight,
-          options
+          options,
+          htmlLayout
         );
     }
   }

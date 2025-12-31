@@ -961,7 +961,7 @@ export async function generateLayout(
   canvasHeight: number,
   customSystemPrompt?: string,
   options?: { strategy?: AIGenerationStrategy },
-): Promise<TemplateElement[]> {
+): Promise<string | TemplateElement[]> {
   const genAI = new GoogleGenerativeAI(apiKey);
 
   // Try a small set of text-capable models. (Avoid embeddings / image-only models.)
@@ -1029,13 +1029,16 @@ USER COMMAND:
 
 TASK:
 - Return ONLY a raw HTML snippet that represents the desired layout.
-- Use a single root <div> with style="position:relative;width:{canvasWidth}px;height:{canvasHeight}px;background:#ffffff;".
+
 - Inside it, use <div>, <img>, and <svg> elements with inline styles and position:absolute; left/top/width/height in pixels.
 - Do NOT return Markdown, JSON, backticks, or explanations; only HTML.
 `;
 
-        const htmlResult = await model.generateContent([htmlContext]);
+        const htmlResult = await model.generateContent([customSystemPrompt||htmlContext]);
         const htmlText = htmlResult.response.text();
+        return htmlText;
+
+
 
         // Prefer the text-based parser (works in Node and browser and understands gradients/SVG)
         let parsed = parseHtmlElementsFromText(htmlText, canvasWidth, canvasHeight);
