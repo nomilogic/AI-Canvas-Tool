@@ -1665,6 +1665,24 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
               className="px-3 py-1 text-xs rounded bg-[#6b21a8] hover:bg-[#7c3aed] text-white ml-2"
               title="Open Claude Chat"
               onClick={() => {
+                if (selectedIds.length > 0) {
+                  // Describe the first selected element (quick-help)
+                  const el = elements.find((e) => e.id === selectedIds[0]);
+                  if (el) {
+                    const parts: string[] = [];
+                    parts.push(`Describe this element:`);
+                    parts.push(`Type: ${(el as any).type}`);
+                    if (el.name) parts.push(`Name: ${el.name}`);
+                    parts.push(`Position: ${Math.round(el.x)}, ${Math.round(el.y)}`);
+                    parts.push(`Size: ${Math.round(el.width)} x ${Math.round(el.height)}`);
+                    if ((el as any).color) parts.push(`Color: ${(el as any).color}`);
+                    if ((el as any).fontFamily) parts.push(`Font: ${(el as any).fontFamily}`);
+                    if ((el as any).content) parts.push(`Content: ${(el as any).content}`);
+                    const prompt = parts.join(' | ');
+                    onOpenClaudeChat?.(prompt);
+                    return;
+                  }
+                }
                 onOpenClaudeChat?.();
               }}
             >

@@ -4,14 +4,14 @@ import { CommandBar } from '../components/canvas/CommandBar';
 import { TemplateElement } from '../types/templates'; // Updated import
 import { normalizeAiOutput } from '../lib/template-ai';
 import AIService from '../lib/ai-service';
-import { getAIConfig, setStoredProviderKey } from '../lib/ai-config';
+import { getAIConfig, setStoredProviderKey, getStoredProviderKey, aiConfigEvents } from '../lib/ai-config';
 import { elementsToHtml, htmlToElements, ensureHtmlHasElementIds } from '../lib/layout-html';
 import { Layers, Sparkles, BrainCircuit, FileJson, FileCode, Save, FolderOpen, Image as ImageIcon, Undo, Redo, Settings } from 'lucide-react';
 import { CodeExporter } from '../components/canvas/CodeExporter';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
 import html2canvas from 'html2canvas';
-import { ApiKeyModal } from '../components/modals/ApiKeyModal';
+import AIModelSelector from '../components/AIModelSelector';
 import ClaudeChatBox from '../components/ClaudeChatBox';
 
 const LAYOUTS_STORAGE_KEY = 'ai-layout-engine.layouts.v1';
@@ -28,13 +28,37 @@ export default function CanvasTool() {
   const [mode, setMode] = useState<'canvas' | 'json' | 'code' | 'html'>('canvas'); // Added 'html' mode for direct HTML editing
   const [isProcessing, setIsProcessing] = useState(false);
   // Priority: Local Storage -> Env Var -> Empty
-  const [apiKey, setApiKey] = useState(() => {
-    return localStorage.getItem('gemini_api_key') || import.meta.env.VITE_GEMINI_API_KEY || '';
-  });
   const [jsonInput, setJsonInput] = useState('');
 
   // Claude chat box visibility
   const [isClaudeChatVisible, setIsClaudeChatVisible] = useState(false);
+  const [initialClaudePrompt, setInitialClaudePrompt] = useState<string | undefined>(undefined);
+
+  // Version counter to force re-render when AI config / keys change elsewhere
+  const [aiConfigVersion, setAiConfigVersion] = useState(0);
+
+  // Listen for ai-config changes so the status indicator updates immediately when keys are saved
+  React.useEffect(() => {
+    const handler = () => setAiConfigVersion((v) => v + 1);
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('ai-config-changed', handler as EventListener);
+    }
+    try {
+      aiConfigEvents.addEventListener('ai-config-changed', handler as EventListener);
+    } catch (e) {
+      // ignore
+    }
+    return () => {
+      if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+        window.removeEventListener('ai-config-changed', handler as EventListener);
+      }
+      try {
+        aiConfigEvents.removeEventListener('ai-config-changed', handler as EventListener);
+      } catch (e) {
+        // ignore
+      }
+    };
+  }, []);
 
   // Canvas size comes from the editor (defaults to 16:9 preset).
   const [canvasSize, setCanvasSize] = useState({ width: 1280, height: 720 });
@@ -82,15 +106,7 @@ export default function CanvasTool() {
   }, [mode]);
 
   // On mount, if a Gemini key was saved via the old flow (gemini_api_key),
-  // On mount, if a Gemini key was saved via the old flow (gemini_api_key),
-  // sync it into the ai-config provider key store so AIService can read it.
-  useEffect(() => {
-    if (apiKey && apiKey.trim().length > 0) {
-      setStoredProviderKey('gemini', apiKey);
-    }
-    // We intentionally run this only once on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // (No legacy API key sync required here - keys are managed via the unified settings dialog.)
 
   // Sync JSON editor when elements change (unless we are editing)
   useEffect(() => {
@@ -260,22 +276,21 @@ export default function CanvasTool() {
     }
   };
 
-  const handleApiKeySave = (key: string) => {
-    setApiKey(key);
-    localStorage.setItem('gemini_api_key', key);
-    // Also persist into the ai-config provider key store used by getAIConfig/AIService.
-    setStoredProviderKey('gemini', key);
-    toast.success("API Key saved!");
-  };
+  // Legacy API key save handler removed; use unified settings dialog instead.
 
-  const handleCommand = async (prompt: string) => {
+  const handleCommand = async (prompt: string, attachedFile?: { dataUrl: string; name: string; type: string } | null) => {
     const config = getAIConfig();
 
     setIsProcessing(true);
     try {
       const aiService = new AIService(config);
+      // If an attachment is present, include it inline at the top of the prompt so the provider receives it.
+      const promptToSend = attachedFile
+        ? (attachedFile.type.startsWith('image/') ? `![${attachedFile.name}](${attachedFile.dataUrl})\n\n${prompt}` : `[file: ${attachedFile.name}](${attachedFile.dataUrl})\n\n${prompt}`)
+        : prompt;
+
       const newElements = await aiService.generateLayout(
-        prompt,
+        promptToSend,
         elements,
         canvasSize.width,
         canvasSize.height,
@@ -331,11 +346,50 @@ export default function CanvasTool() {
     "Draw a red circle in the absolute center",
   ];
 
+  const AIStatusIndicator = () => {
+    try {
+      const cfg = getAIConfig();
+      const provider = cfg.provider;
+      let active = false;
+      if (provider === 'puter') {
+        active = localStorage.getItem('puter_enabled') === '1';
+      } else if (provider === 'huggingface') {
+        active = Boolean(getStoredProviderKey('huggingface', cfg.huggingfaceModel) || cfg.apiKey);
+      } else if (provider === 'gemini') {
+        active = Boolean(getStoredProviderKey('gemini') || cfg.apiKey || import.meta.env.VITE_GEMINI_API_KEY);
+      } else if (provider === 'groq') {
+        active = Boolean(getStoredProviderKey('groq') || cfg.groqApiKey);
+      } else if (provider === 'claude') {
+        active = Boolean(getStoredProviderKey('claude') || cfg.claudeApiKey);
+      } else if (provider === 'ollama') {
+        // Ollama is local, assume active if URL is set
+        active = Boolean(cfg.ollamaUrl);
+      }
+      return (
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-xs font-medium">
+          {active ? (
+            <>
+              <BrainCircuit className="w-3 h-3 text-green-400" />
+              <span className="text-green-400">AI Active</span>
+            </>
+          ) : (
+            <>
+              <div className="w-2 h-2 rounded-full bg-yellow-500/50"></div>
+              <span className="text-white/40">Setup Key</span>
+            </>
+          )}
+        </div>
+      );
+    } catch (e) {
+      return null;
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col font-sans selection:bg-violet-500/30">
       <header className="h-14 border-b border-white/10 flex items-center justify-between px-6 bg-[#0a0a0a]/50 backdrop-blur-md sticky top-0 z-50">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center">
+          <div className="w-8 h-8 rounded-lg bg-linear-to-br from-violet-600 to-indigo-600 flex items-center justify-center">
             <Sparkles className="w-4 h-4 text-white" />
           </div>
           <span className="font-bold tracking-tight">AI Layout <span className="text-white/40 font-normal">Engine</span></span>
@@ -423,23 +477,11 @@ export default function CanvasTool() {
             >
               <Redo className="w-3 h-3" />
             </button>
-            {/* Settings icon opens the API Key modal (same behavior as before) */}
-            <ApiKeyModal apiKey={apiKey} onSave={handleApiKeySave} />
+            {/* Unified AI settings */}
+              <AIModelSelector />
           </div>
 
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-xs font-medium">
-            {apiKey ? (
-              <>
-                <BrainCircuit className="w-3 h-3 text-green-400" />
-                <span className="text-green-400">AI Active</span>
-              </>
-            ) : (
-              <>
-                <div className="w-2 h-2 rounded-full bg-yellow-500/50"></div>
-                <span className="text-white/40">Setup Key</span>
-              </>
-            )}
-          </div>
+          <AIStatusIndicator />
         </div>
       </header>
 
@@ -521,7 +563,10 @@ export default function CanvasTool() {
                       onAiSchemaModeChange={(next) => setAiStrategy(next ? 'schema' : 'full')}
                       onCanvasElementRefChange={(el) => { canvasDomRef.current = el; }}
                       onRegisterEditorActions={(actions) => { editorActionsRef.current = actions; }}
-                      onOpenClaudeChat={() => setIsClaudeChatVisible(true)}
+                      onOpenClaudeChat={(prompt?: string) => {
+                        setInitialClaudePrompt(prompt);
+                        setIsClaudeChatVisible(true);
+                      }}
                   />
               </div>
             )}
@@ -549,7 +594,13 @@ export default function CanvasTool() {
 
       {/* Floating Claude Chat Box */}
       {isClaudeChatVisible && (
-        <ClaudeChatBox onClose={() => setIsClaudeChatVisible(false)} />
+        <ClaudeChatBox
+          initialPrompt={initialClaudePrompt}
+          onClose={() => {
+            setIsClaudeChatVisible(false);
+            setInitialClaudePrompt(undefined);
+          }}
+        />
       )}
 
       <Toaster theme="dark" position="bottom-right" />

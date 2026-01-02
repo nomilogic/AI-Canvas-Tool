@@ -266,6 +266,37 @@ function extractJsonObject(text: string): string {
   return cleaned.slice(start, end + 1);
 }
 
+/**
+ * Parse a free-form prompt and split into text and inlineData parts suitable for generateContent.
+ * Exports for unit testing.
+ */
+export function parsePromptToParts(textBlock: string): Array<string | any> {
+  const parts: Array<string | any> = [];
+  const dataUriRegex = /(https?:\/\/[^\s)]+|data:[^\)\s]+|!\[[^\]]*\]\((data:[^\)\s]+)\))/g;
+  const matches = Array.from((textBlock || '').matchAll(dataUriRegex));
+  if (matches.length === 0) return [textBlock];
+
+  let lastIndex = 0;
+  for (const m of matches) {
+    const matchStr = m[0];
+    const idx = (m as any).index ?? -1;
+    if (idx > lastIndex) parts.push({ text: textBlock.slice(lastIndex, idx) });
+
+    const dataUri = m[2] || (matchStr.startsWith('data:') ? matchStr : undefined);
+    if (dataUri) {
+      const dm = dataUri.match(/^data:([^;]+);base64,(.*)$/);
+      if (dm) parts.push({ inlineData: { mimeType: dm[1], data: dm[2] } });
+      else parts.push({ text: dataUri });
+    } else {
+      parts.push({ text: matchStr });
+    }
+
+    lastIndex = idx + matchStr.length;
+  }
+  if (lastIndex < textBlock.length) parts.push({ text: textBlock.slice(lastIndex) });
+  return parts;
+}
+
 function stripScripts(html: string): string {
   // Remove any <script>...</script> blocks for safety before injecting into a DOM container.
   return typeof html === 'string' ? html.replace(/<script[\s\S]*?<\/script>/gi, '') : '';
@@ -686,7 +717,7 @@ function ensureImageElementsWhenRequested(
     const h = Math.max(1, Math.round(el.height));
     const label = encodeURIComponent((el as any).name ?? 'Image');
     return elements.map((e) => {
-      if (e.id !== el.id) return e;
+      if e.id !== el.id) return e;
       return {
         ...(e as any),
         type: 'image',
@@ -961,27 +992,26 @@ export async function generateLayout(
   canvasHeight: number,
   customSystemPrompt?: string,
   options?: { strategy?: AIGenerationStrategy },
+  preferredModel?: string, // <--- added param
 ): Promise<string | TemplateElement[]> {
   const genAI = new GoogleGenerativeAI(apiKey);
 
-  // Try a small set of text-capable models. (Avoid embeddings / image-only models.)
-  // NOTE: Even if the user asks for an "image", this function still expects the model to return JSON.
-  // Image binaries should be created separately (or via placeholders) to avoid breaking JSON parsing.
-  // Per project requirement: use only Flash for layout JSON (no Pro / Vision).
- const modelsToTry = [
-  "gemini-2.5-flash-preview-09-2025", // Preview (Sep 2025): Improved layout generation
-   "gemini-3-flash", // Latest (Dec 2025): PhD-level reasoning at Flash speed
-   "gemini-3-pro", // Latest (Nov 2025): Best for complex math/coding
-   "gemini-2.5-pro", // Stable: High reasoning for general tasks
-   "gemini-2.5-flash", // Stable: Balanced speed and accuracy
-   "gemini-2.5-flash-lite", // Stable: High-volume, low-cost
- ];
+  // Default/candidate models
+  const defaultModels = [
+    "gemini-2.5-flash-preview-09-2025",
+    "gemini-3-flash",
+    "gemini-3-pro",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash-image",
+  ];
 
-  const config = {
-    tools: {
-      googleSearch: {},
-    },
-  };
+  // Prefer the user-selected model (if provided) first, de-duplicate
+  const modelsToTry = preferredModel && preferredModel.trim().length > 0
+    ? [preferredModel, ...defaultModels.filter(m => m !== preferredModel)]
+    : defaultModels;
+
   let lastError: any = null;
 
   for (const modelName of modelsToTry) {
@@ -989,11 +1019,7 @@ export async function generateLayout(
       console.log(`Attempting to generate with model: ${modelName}`);
       const model = genAI.getGenerativeModel({
         model: modelName,
-         tools: [{
-        googleSearch: {},
- // Empty object enables the tool with default settings
-      }],
-       
+        tools: [{ googleSearch: {} }],
       });
       const promptLower = prompt.toLowerCase();
 
@@ -1034,7 +1060,40 @@ TASK:
 - Do NOT return Markdown, JSON, backticks, or explanations; only HTML.
 `;
 
-        const htmlResult = await model.generateContent([customSystemPrompt||htmlContext]);
+        // Support inline images passed in the user prompt (data URIs). Convert any data: URIs into InlineData parts
+        const htmlRequestParts: Array<string | any> = [];
+        htmlRequestParts.push(customSystemPrompt || htmlContext);
+        const dataUriRegex = /(https?:\/\/[^\s)]+|data:[^\)\s]+)/g;
+        const matches = Array.from((htmlContext || '').matchAll(dataUriRegex));
+        if (matches.length > 0) {
+          // Split the htmlContext into text and inline data parts
+          let lastIndex = 0;
+          for (const m of matches) {
+            const idx = (m as any).index ?? -1;
+            if (idx > lastIndex) {
+              htmlRequestParts.push({ text: (htmlContext || '').slice(lastIndex, idx) });
+            }
+            const uri = m[0];
+            if (uri.startsWith('data:')) {
+              const dm = uri.match(/^data:([^;]+);base64,(.*)$/);
+              if (dm) {
+                htmlRequestParts.push({ inlineData: { mimeType: dm[1], data: dm[2] } });
+              } else {
+                // Fallback: send as text if not a base64 data URI
+                htmlRequestParts.push({ text: uri });
+              }
+            } else {
+              // Regular URL - include as text so the model may fetch it if enabled
+              htmlRequestParts.push({ text: uri });
+            }
+            lastIndex = idx + uri.length;
+          }
+          if (lastIndex < (htmlContext || '').length) htmlRequestParts.push({ text: (htmlContext || '').slice(lastIndex) });
+        } else {
+          htmlRequestParts.push(htmlContext);
+        }
+
+        const htmlResult = await model.generateContent(htmlRequestParts);
         const htmlText = htmlResult.response.text();
         return htmlText;
 
@@ -1096,7 +1155,40 @@ Return the fully updated JSON array of TemplateElement objects (ensuring ALL ele
       const systemPromptToUse =
         customSystemPrompt || (strategy === "schema" ? ACTIONS_SYSTEM_PROMPT : SYSTEM_PROMPT);
 
-      const result = await model.generateContent([systemPromptToUse, context]);
+      // If the prompt contains data URLs (pasted/attached images), convert into InlineData parts
+      const makeRequestParts = (textBlock: string) => {
+        const parts: Array<string | any> = [];
+        const dataUriRegex = /(https?:\/\/[^\s)]+|data:[^\)\s]+|!\[[^\]]*\]\((data:[^\)\s]+)\))/g;
+        const matches = Array.from((textBlock || '').matchAll(dataUriRegex));
+        if (matches.length === 0) return [textBlock];
+
+        let lastIndex = 0;
+        for (const m of matches) {
+          const matchStr = m[0];
+          const idx = (m as any).index ?? -1;
+          if (idx > lastIndex) parts.push({ text: textBlock.slice(lastIndex, idx) });
+
+          // If the match contained a data URI (markdown image capture in group 2), prefer that
+          const dataUri = m[2] || (matchStr.startsWith('data:') ? matchStr : undefined);
+          if (dataUri) {
+            const dm = dataUri.match(/^data:([^;]+);base64,(.*)$/);
+            if (dm) parts.push({ inlineData: { mimeType: dm[1], data: dm[2] } });
+            else parts.push({ text: dataUri });
+          } else {
+            // Regular URL or non-data image - send as text so the model may fetch it.
+            parts.push({ text: matchStr });
+          }
+
+          lastIndex = idx + matchStr.length;
+        }
+        if (lastIndex < textBlock.length) parts.push({ text: textBlock.slice(lastIndex) });
+        return parts;
+      };
+
+      const requestParts: Array<string | any> = [systemPromptToUse];
+      requestParts.push(...parsePromptToParts(context));
+
+      const result = await model.generateContent(requestParts);
 
       const response = result.response;
       const text = response.text();

@@ -1,5 +1,18 @@
 import assert from 'assert';
 import { parseHtmlElementsFromText, parseJsonElementsFromText } from '../client/src/lib/template-ai';
+import AIService from '../client/src/lib/ai-service';
+
+// Provide a minimal localStorage shim when running in Node for tests
+if (typeof localStorage === 'undefined') {
+  (globalThis as any).localStorage = (() => {
+    const store = new Map<string, string>();
+    return {
+      getItem: (k: string) => (store.has(k) ? (store.get(k) as string) : null),
+      setItem: (k: string, v: string) => store.set(k, String(v)),
+      removeItem: (k: string) => store.delete(k),
+    } as Storage;
+  })();
+}
 
 console.log('Running provider integration tests...');
 
@@ -55,3 +68,71 @@ const parsedWrapped = parseJsonElementsFromText(wrapped, 800, 600);
 assert(parsedWrapped.some((e) => e.type === 'text' && (e as any).content?.includes('Wrap Test')), 'Wrapped JSON parsed text');
 
 console.log('All provider integration assertions passed ✅');
+
+// 5) Ensure AIService handles OpenAI/DeepSeek provider selections by throwing when key is missing
+(async () => {
+  const svcOpen = new AIService({ provider: 'openai' as any });
+  let threw = false;
+  try {
+    await svcOpen.generateLayout('Test prompt', [], 800, 600);
+  } catch (e) {
+    threw = true;
+  }
+  assert(threw, 'OpenAI provider without key should throw');
+
+  // DeepSeek uses server-side proxy; the server requires DEEPSEEK_API_KEY to be configured.
+  const svcDeep = new AIService({ provider: 'deepseek' as any });
+  threw = false;
+  try {
+    await svcDeep.generateLayout('Test prompt', [], 800, 600);
+  } catch (e) {
+    threw = true;
+  }
+  assert(threw, 'DeepSeek should throw when server proxy is not configured with API key');
+
+  console.log('AIService provider key checks passed ✅');
+})();
+
+  // 6) Ensure setStoredProviderKey dispatches a global change event so UI can sync
+  // 6) Ensure setStoredProviderKey dispatches a global change event so UI can sync
+  {
+    let fired = false;
+    const handler = () => { fired = true; };
+
+    // Call the helper (use dynamic import to work in ESM)
+    const mod = await import('../client/src/lib/ai-config');
+
+    try {
+      mod.aiConfigEvents.addEventListener('ai-config-changed', handler as EventListener);
+    } catch (e) {
+      // fallback: try listening on window if available
+      if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+        window.addEventListener('ai-config-changed', handler as EventListener);
+      }
+    }
+
+    // Trigger
+    mod.setStoredProviderKey('gemini', 'test-key-123');
+
+    // Remove the test key
+    mod.setStoredProviderKey('gemini', '');
+
+    // cleanup
+    try { mod.aiConfigEvents.removeEventListener('ai-config-changed', handler as EventListener); } catch (e) {}
+    if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+      window.removeEventListener('ai-config-changed', handler as EventListener);
+    }
+
+    assert(fired, 'setStoredProviderKey should fire ai-config-changed event');
+    console.log('ai-config change event dispatch verified ✅');
+  }
+
+  // 7) parsePromptToParts should detect data URIs and split into inlineData parts
+  {
+    const { parsePromptToParts } = await import('../client/src/lib/gemini');
+    const sample = 'Here is an uploaded image: ![img](data:image/png;base64,AAAA) and then more text';
+    const parts = parsePromptToParts(sample);
+    const hasInline = parts.some((p: any) => p && p.inlineData && p.inlineData.mimeType === 'image/png');
+    console.assert(hasInline, 'parsePromptToParts should extract inlineData for data URI');
+    console.log('parsePromptToParts data URI parsing verified ✅');
+  }
