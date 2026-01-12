@@ -76986,7 +76986,7 @@ export interface Template {
 +  return {
 +    ...(el as any),
 +    // Safe default so the editor always has something renderable.
-+    src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
++    src: `actual url or base64`,
 +  };
 +}
 +
@@ -84724,7 +84724,7 @@ AGENT:
 +        ...(e as any),
 +        type: 'image',
 +        // placeholder until we hydrate
-+        src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
++        src: `actual url or base64`,
 +      } as TemplateElement;
 +    });
 +  }
@@ -163637,7 +163637,7 @@ export interface Template {
 +  return {
 +    ...(el as any),
 +    // Safe default so the editor always has something renderable.
-+    src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
++    src: `actual url or base64`,
 +  };
 +}
 +
@@ -171375,7 +171375,7 @@ AGENT:
 +        ...(e as any),
 +        type: 'image',
 +        // placeholder until we hydrate
-+        src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
++        src: `actual url or base64`,
 +      } as TemplateElement;
 +    });
 +  }
@@ -173740,7 +173740,7 @@ function ensureImageElementsWhenRequested(
         ...(e as any),
         type: 'image',
         // placeholder until we hydrate
-        src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
+        src: `actual url or base64`,
       } as TemplateElement;
     });
   }
@@ -174589,7 +174589,7 @@ function ensureImageElementsWhenRequested(
         ...(e as any),
         type: 'image',
         // placeholder until we hydrate
-        src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
+        src: `actual url or base64`,
       } as TemplateElement;
     });
   }
@@ -175422,7 +175422,7 @@ function ensureImageElementsWhenRequested(
         ...(e as any),
         type: 'image',
         // placeholder until we hydrate
-        src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
+        src: `actual url or base64`,
       } as TemplateElement;
     });
   }
@@ -176429,7 +176429,7 @@ function ensureImageSrc(el: TemplateElement): TemplateElement {
   return {
     ...(el as any),
     // Safe default so the editor always has something renderable.
-    src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
+    src: `actual url or base64`,
   };
 }
 
@@ -177280,7 +177280,7 @@ function ensureImageElementsWhenRequested(
         ...(e as any),
         type: 'image',
         // placeholder until we hydrate
-        src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
+        src: `actual url or base64`,
       } as TemplateElement;
     });
   }
@@ -182172,7 +182172,7 @@ function ensureImageElementsWhenRequested(
         ...(e as any),
         type: 'image',
         // placeholder until we hydrate
-        src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
+        src: `actual url or base64`,
       } as TemplateElement;
     });
   }
@@ -183358,7 +183358,7 @@ function ensureImageElementsWhenRequested(
         ...(e as any),
         type: 'image',
         // placeholder until we hydrate
-        src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
+        src: `actual url or base64`,
       } as TemplateElement;
     });
   }
@@ -186611,7 +186611,7 @@ function ensureImageElementsWhenRequested(
         ...(e as any),
         type: 'image',
         // placeholder until we hydrate
-        src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
+        src: `actual url or base64`,
       } as TemplateElement;
     });
   }
@@ -190379,7 +190379,7 @@ function ensureImageElementsWhenRequested(
         ...(e as any),
         type: 'image',
         // placeholder until we hydrate
-        src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
+        src: `actual url or base64`,
       } as TemplateElement;
     });
   }

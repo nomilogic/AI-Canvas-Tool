@@ -446,7 +446,7 @@ export default function CanvasTool() {
       <main className="flex-1 overflow-hidden relative flex flex-col items-center justify-center bg-grid-pattern">
         
         {/* Render Area */}
-        <div className="w-full h-full relative group">
+        <div className="w-full h-[calc(100vh-64px)] relative group">
             {mode === 'json' ? (
               <div className="w-full h-full p-8 flex items-center justify-center">
                 <div className="w-[800px] h-[600px] bg-[#1e1e1e] rounded-lg border border-white/10 flex flex-col shadow-2xl">

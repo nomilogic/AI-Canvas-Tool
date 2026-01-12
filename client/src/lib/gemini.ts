@@ -690,7 +690,7 @@ function ensureImageElementsWhenRequested(
         ...(e as any),
         type: 'image',
         // placeholder until we hydrate
-        src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
+        src: `actual url or base64`,
       } as TemplateElement;
     });
   }

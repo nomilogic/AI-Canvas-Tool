@@ -520,7 +520,7 @@ function ensureImageSrc(el: TemplateElement): TemplateElement {
   return {
     ...(el as any),
     // Safe default so the editor always has something renderable.
-    src: `https://via.placeholder.com/${w}x${h}?text=${label}`,
+    src: `actual url or base64`,
   };
 }
 

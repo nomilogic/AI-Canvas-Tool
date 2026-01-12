@@ -1893,7 +1893,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       </div>
 
       {/* Layers & Properties Panel (mobile: bottom sheet area). Position (left/right) is toggleable */}
-      <div className={`order-3 ${panelOnLeft ? 'md:order-2' : 'md:order-3'} w-full md:w-1/4 bg-[#252526] border-t md:border-t-0 ${panelOnLeft ? 'md:border-r' : 'md:border-l'} border-[#3e3e42] flex flex-col md:h-[70vh] md:flex-none min-h-0`}>
+      <div className={`order-3 ${panelOnLeft ? 'md:order-2' : 'md:order-3'} w-full md:w-1/4 bg-[#252526] border-t md:border-t-0 ${panelOnLeft ? 'md:border-r' : 'md:border-l'} border-[#3e3e42] flex flex-col md:flex-none min-h-0`}>
         <div className="p-4 border-b border-[#3e3e42] flex justify-between items-center bg-[#2d2d30]">
           <h2 className="font-semibold text-sm text-gray-200">Layers</h2>
           <div className="flex gap-2">
