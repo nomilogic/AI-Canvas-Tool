@@ -717,7 +717,7 @@ function ensureImageElementsWhenRequested(
     const h = Math.max(1, Math.round(el.height));
     const label = encodeURIComponent((el as any).name ?? 'Image');
     return elements.map((e) => {
-      if e.id !== el.id) return e;
+      if (e.id !== el.id) return e;
       return {
         ...(e as any),
         type: 'image',
