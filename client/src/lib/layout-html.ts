@@ -29,7 +29,21 @@ export function elementsToHtml(
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#039;");
 
+  // If there is a full-canvas shape element (the relative root div from AI),
+  // prefer to use it as the background for the root container so editing it
+  // updates the canvas directly. We also attach its data-el-id to the root
+  // so in-place raw CSS edits can target the root element.
+  const bgEl = sorted.find(
+    (e) =>
+      e.type === "shape" &&
+      e.x <= 0 &&
+      e.y <= 0 &&
+      e.width >= width &&
+      e.height >= height,
+  ) as any | undefined;
+
   const children = sorted
+    .filter((el) => !(bgEl && el.id === bgEl.id))
     .map((el) => {
       const style: string[] = [];
       style.push("position:absolute");
@@ -50,7 +64,22 @@ export function elementsToHtml(
         const s = el as ShapeElement;
         const shapeStyle: string[] = [];
 
-        if (s.color) shapeStyle.push(`background:${s.color}`);
+        // Background / Gradient / Fill
+        if (s.gradient && (s.gradient as any).enabled) {
+          const g = s.gradient as any;
+          if (g.type === 'linear') {
+            const stops = Array.isArray(g.stops) ? g.stops : [];
+            const parts = stops.map((st: any) => `${st.color} ${Math.round((st.offset ?? 0) * 100)}%`);
+            const angle = typeof g.rotation === 'number' ? `${g.rotation}deg` : '0deg';
+            shapeStyle.push(`background:linear-gradient(${angle}, ${parts.join(', ')})`);
+          } else if (g.type === 'radial') {
+            const stops = Array.isArray(g.stops) ? g.stops : [];
+            const parts = stops.map((st: any) => `${st.color} ${Math.round((st.offset ?? 0) * 100)}%`);
+            shapeStyle.push(`background:radial-gradient(circle, ${parts.join(', ')})`);
+          }
+        } else if ((s as any).color) {
+          shapeStyle.push(`background:${(s as any).color}`);
+        }
 
         // Encode the logical shape type into CSS so non-rectangular shapes (triangle,
         // diamond, etc.) are actually visible in the HTML renderer.
@@ -83,6 +112,17 @@ export function elementsToHtml(
         // Explicit borderRadius on the element overrides the canned defaults above.
         if (typeof (s as any).borderRadius === "number") {
           shapeStyle.push(`border-radius:${Math.round((s as any).borderRadius)}px`);
+        }
+
+        // Shadow
+        if ((s as any).shadow && (s as any).shadow.enabled) {
+          const sh = (s as any).shadow as any;
+          const hex = (sh.color || '#000000').replace('#', '');
+          const r = parseInt(hex.substring(0, 2), 16);
+          const g = parseInt(hex.substring(2, 4), 16);
+          const b = parseInt(hex.substring(4, 6), 16);
+          const o = typeof sh.opacity === 'number' ? sh.opacity : 1;
+          shapeStyle.push(`box-shadow:${Math.round(sh.offsetX)}px ${Math.round(sh.offsetY)}px ${Math.round(sh.blur)}px rgba(${r},${g},${b},${o})`);
         }
 
         const merged = style.concat(shapeStyle);
@@ -151,14 +191,48 @@ export function elementsToHtml(
     })
     .join("\n");
 
-  const rootStyle = [
-    "position:relative",
-    `width:${Math.round(width)}px`,
-    `height:${Math.round(height)}px`,
-    "background:#ffffff",
-  ].join(";");
+  // Build the root style. If we have an explicit background element, use its
+  // visual properties (color/gradient/image) on the root so it behaves like
+  // a true canvas background and is easy to edit.
+  const rootStyleParts: string[] = ["position:relative", `width:${Math.round(width)}px`, `height:${Math.round(height)}px`];
+  let rootDataAttr = '';
+  if (bgEl) {
+    // Use gradient if present
+    if (bgEl.gradient && (bgEl.gradient as any).enabled) {
+      const g = bgEl.gradient as any;
+      if (g.type === 'linear') {
+        const stops = Array.isArray(g.stops) ? g.stops : [];
+        const parts = stops.map((st: any) => `${st.color} ${Math.round((st.offset ?? 0) * 100)}%`);
+        const angle = typeof g.rotation === 'number' ? `${g.rotation}deg` : '0deg';
+        rootStyleParts.push(`background:linear-gradient(${angle}, ${parts.join(', ')})`);
+      } else if (g.type === 'radial') {
+        const stops = Array.isArray(g.stops) ? g.stops : [];
+        const parts = stops.map((st: any) => `${st.color} ${Math.round((st.offset ?? 0) * 100)}%`);
+        rootStyleParts.push(`background:radial-gradient(circle, ${parts.join(', ')})`);
+      }
+    } else if ((bgEl as any).color) {
+      rootStyleParts.push(`background:${(bgEl as any).color}`);
+    }
 
-  return `<div style="${rootStyle}">
+    if ((bgEl as any).shadow && (bgEl as any).shadow.enabled) {
+      const sh = (bgEl as any).shadow as any;
+      const hex = (sh.color || '#000000').replace('#', '');
+      const r = parseInt(hex.substring(0, 2), 16);
+      const g = parseInt(hex.substring(2, 4), 16);
+      const b = parseInt(hex.substring(4, 6), 16);
+      const o = typeof sh.opacity === 'number' ? sh.opacity : 1;
+      rootStyleParts.push(`box-shadow:${Math.round(sh.offsetX)}px ${Math.round(sh.offsetY)}px ${Math.round(sh.blur)}px rgba(${r},${g},${b},${o})`);
+    }
+
+    // Expose the background element id on the root so raw CSS edits can target it.
+    rootDataAttr = ` data-el-id=\"${bgEl.id}\"`;
+  } else {
+    rootStyleParts.push("background:#ffffff");
+  }
+
+  const rootStyle = rootStyleParts.join(";");
+
+  return `<div${rootDataAttr} style="${rootStyle}">
 ${children}
 </div>`;
 }
@@ -231,13 +305,32 @@ export function updateHtmlRawStyle(
   id: string,
   style: string,
 ): string {
-  if (!html || typeof document === "undefined") return html;
-  const container = document.createElement("div");
-  container.innerHTML = stripScripts(html);
-  const el = container.querySelector<HTMLElement>(`[data-el-id="${id}"]`);
-  if (!el) return html;
-  el.setAttribute("style", style || "");
-  return container.innerHTML;
+  if (!html) return html;
+
+  // In browser environments use the real DOM for accurate parsing & layout.
+  if (typeof document !== "undefined") {
+    const container = document.createElement("div");
+    container.innerHTML = stripScripts(html);
+    const el = container.querySelector<HTMLElement>(`[data-el-id="${id}"]`);
+    if (!el) return html;
+    el.setAttribute("style", style || "");
+    return container.innerHTML;
+  }
+
+  // Server-side / test fallback: do a best-effort string replacement so tests
+  // and non-DOM environments can still patch inline styles.
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const tagRe = new RegExp(`(<[^>]*data-el-id=["']${esc(id)}["'][^>]*>)`, "i");
+  const m = html.match(tagRe);
+  if (!m) return html;
+  const tag = m[1];
+  let newTag: string;
+  if (/\sstyle=/.test(tag)) {
+    newTag = tag.replace(/style=("[^"]*"|'[^']*')/i, `style="${style}"`);
+  } else {
+    newTag = tag.replace(/>$/, ` style="${style}">`);
+  }
+  return html.replace(tag, newTag);
 }
 
 /**

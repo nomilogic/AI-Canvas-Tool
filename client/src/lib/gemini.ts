@@ -3,6 +3,7 @@ import type { TemplateElement } from "../types/templates";
 import {
   applyAiActions,
   normalizeAiOutput,
+  parseHtmlElementsFromText,
   type AIGenerationStrategy,
   type AiActionsResponse,
 } from "./template-ai";
@@ -263,6 +264,37 @@ function extractJsonObject(text: string): string {
   const end = cleaned.lastIndexOf("}");
   if (start === -1 || end === -1 || end < start) return cleaned;
   return cleaned.slice(start, end + 1);
+}
+
+/**
+ * Parse a free-form prompt and split into text and inlineData parts suitable for generateContent.
+ * Exports for unit testing.
+ */
+export function parsePromptToParts(textBlock: string): Array<string | any> {
+  const parts: Array<string | any> = [];
+  const dataUriRegex = /(https?:\/\/[^\s)]+|data:[^\)\s]+|!\[[^\]]*\]\((data:[^\)\s]+)\))/g;
+  const matches = Array.from((textBlock || '').matchAll(dataUriRegex));
+  if (matches.length === 0) return [textBlock];
+
+  let lastIndex = 0;
+  for (const m of matches) {
+    const matchStr = m[0];
+    const idx = (m as any).index ?? -1;
+    if (idx > lastIndex) parts.push({ text: textBlock.slice(lastIndex, idx) });
+
+    const dataUri = m[2] || (matchStr.startsWith('data:') ? matchStr : undefined);
+    if (dataUri) {
+      const dm = dataUri.match(/^data:([^;]+);base64,(.*)$/);
+      if (dm) parts.push({ inlineData: { mimeType: dm[1], data: dm[2] } });
+      else parts.push({ text: dataUri });
+    } else {
+      parts.push({ text: matchStr });
+    }
+
+    lastIndex = idx + matchStr.length;
+  }
+  if (lastIndex < textBlock.length) parts.push({ text: textBlock.slice(lastIndex) });
+  return parts;
 }
 
 function stripScripts(html: string): string {
@@ -960,27 +992,26 @@ export async function generateLayout(
   canvasHeight: number,
   customSystemPrompt?: string,
   options?: { strategy?: AIGenerationStrategy },
-): Promise<TemplateElement[]> {
+  preferredModel?: string, // <--- added param
+): Promise<string | TemplateElement[]> {
   const genAI = new GoogleGenerativeAI(apiKey);
 
-  // Try a small set of text-capable models. (Avoid embeddings / image-only models.)
-  // NOTE: Even if the user asks for an "image", this function still expects the model to return JSON.
-  // Image binaries should be created separately (or via placeholders) to avoid breaking JSON parsing.
-  // Per project requirement: use only Flash for layout JSON (no Pro / Vision).
- const modelsToTry = [
-  "gemini-2.5-flash-preview-09-2025", // Preview (Sep 2025): Improved layout generation
-   "gemini-3-flash", // Latest (Dec 2025): PhD-level reasoning at Flash speed
-   "gemini-3-pro", // Latest (Nov 2025): Best for complex math/coding
-   "gemini-2.5-pro", // Stable: High reasoning for general tasks
-   "gemini-2.5-flash", // Stable: Balanced speed and accuracy
-   "gemini-2.5-flash-lite", // Stable: High-volume, low-cost
- ];
+  // Default/candidate models
+  const defaultModels = [
+    "gemini-2.5-flash", 
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash-preview-09-2025",
+    "gemini-3-flash",
+    "gemini-3-pro",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash-image",
+  ];
 
-  const config = {
-    tools: {
-      googleSearch: {},
-    },
-  };
+  // Prefer the user-selected model (if provided) first, de-duplicate
+  const modelsToTry = preferredModel && preferredModel.trim().length > 0
+    ? [preferredModel, ...defaultModels.filter(m => m !== preferredModel)]
+    : defaultModels;
+
   let lastError: any = null;
 
   for (const modelName of modelsToTry) {
@@ -988,6 +1019,7 @@ export async function generateLayout(
       console.log(`Attempting to generate with model: ${modelName}`);
       const model = genAI.getGenerativeModel({
         model: modelName,
+        tools: [{ googleSearch: {} }],
       });
       const promptLower = prompt.toLowerCase();
 
@@ -1002,9 +1034,9 @@ export async function generateLayout(
   <div style="position:absolute;left:56px;top:56px;width:208px;height:48px;color:#ffffff;font-size:20px;font-family:Inter;font-weight:600;display:flex;align-items:center;justify-content:center;text-align:center;">
     Hero Title
   </div>
-  <img src=\"https://via.placeholder.com/260x160\" alt=\"Image\" style=\"position:absolute;left:320px;top:80px;width:260px;height:160px;object-fit:cover;border-radius:18px;\" />
+  <img src=\"" alt=\"Image\" style=\"position:absolute;left:320px;top:80px;width:260px;height:160px;object-fit:cover;border-radius:18px;\" />
   <div style=\"position:absolute;left:620px;top:120px;width:80px;height:80px;background:#3b82f6;border-radius:9999px;\"></div>
-  <svg viewBox=\"0 0 24 24\" style=\"position:absolute;left:640px;top:136px;width:40px;height:40px;\">\r\n    <path d=\"M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z\" fill=\"#ffffff\" />\r\n  </svg>
+  <svg viewBox=\"0 0 24 24\" stye=\"position:absolute;left:640px;top:136px;width:40px;height:40px;\">\r\n    <path d=\"M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z\" fill=\"#ffffff\" />\r\n  </svg>
 </div>`;
 
         const htmlContext = `
@@ -1023,16 +1055,58 @@ USER COMMAND:
 
 TASK:
 - Return ONLY a raw HTML snippet that represents the desired layout.
-- Use a single root <div> with style="position:relative;width:{canvasWidth}px;height:{canvasHeight}px;background:#ffffff;".
+
 - Inside it, use <div>, <img>, and <svg> elements with inline styles and position:absolute; left/top/width/height in pixels.
 - Do NOT return Markdown, JSON, backticks, or explanations; only HTML.
 `;
 
-        const htmlResult = await model.generateContent([htmlContext]);
+        // Support inline images passed in the user prompt (data URIs). Convert any data: URIs into InlineData parts
+        const htmlRequestParts: Array<string | any> = [];
+        htmlRequestParts.push(customSystemPrompt || htmlContext);
+        const dataUriRegex = /(https?:\/\/[^\s)]+|data:[^\)\s]+)/g;
+        const matches = Array.from((htmlContext || '').matchAll(dataUriRegex));
+        if (matches.length > 0) {
+          // Split the htmlContext into text and inline data parts
+          let lastIndex = 0;
+          for (const m of matches) {
+            const idx = (m as any).index ?? -1;
+            if (idx > lastIndex) {
+              htmlRequestParts.push({ text: (htmlContext || '').slice(lastIndex, idx) });
+            }
+            const uri = m[0];
+            if (uri.startsWith('data:')) {
+              const dm = uri.match(/^data:([^;]+);base64,(.*)$/);
+              if (dm) {
+                htmlRequestParts.push({ inlineData: { mimeType: dm[1], data: dm[2] } });
+              } else {
+                // Fallback: send as text if not a base64 data URI
+                htmlRequestParts.push({ text: uri });
+              }
+            } else {
+              // Regular URL - include as text so the model may fetch it if enabled
+              htmlRequestParts.push({ text: uri });
+            }
+            lastIndex = idx + uri.length;
+          }
+          if (lastIndex < (htmlContext || '').length) htmlRequestParts.push({ text: (htmlContext || '').slice(lastIndex) });
+        } else {
+          htmlRequestParts.push(htmlContext);
+        }
+
+        const htmlResult = await model.generateContent(htmlRequestParts);
         const htmlText = htmlResult.response.text();
-        const parsed = parseAbsoluteHtmlToTemplateElements(htmlText, canvasWidth, canvasHeight);
-        if (parsed.length > 0) {
-          return parsed;
+        return htmlText;
+
+
+
+        // Prefer the text-based parser (works in Node and browser and understands gradients/SVG)
+        let parsed = parseHtmlElementsFromText(htmlText, canvasWidth, canvasHeight);
+        if (parsed.length > 0) return parsed;
+
+        // Fallback to DOM-based parser when running in a browser for better fidelity
+        if (typeof document !== "undefined") {
+          const domParsed = parseAbsoluteHtmlToTemplateElements(htmlText, canvasWidth, canvasHeight);
+          if (domParsed.length > 0) return domParsed;
         }
         // Fallback: if parsing fails, continue to normal JSON pipeline below.
       }
@@ -1081,7 +1155,40 @@ Return the fully updated JSON array of TemplateElement objects (ensuring ALL ele
       const systemPromptToUse =
         customSystemPrompt || (strategy === "schema" ? ACTIONS_SYSTEM_PROMPT : SYSTEM_PROMPT);
 
-      const result = await model.generateContent([systemPromptToUse, context]);
+      // If the prompt contains data URLs (pasted/attached images), convert into InlineData parts
+      const makeRequestParts = (textBlock: string) => {
+        const parts: Array<string | any> = [];
+        const dataUriRegex = /(https?:\/\/[^\s)]+|data:[^\)\s]+|!\[[^\]]*\]\((data:[^\)\s]+)\))/g;
+        const matches = Array.from((textBlock || '').matchAll(dataUriRegex));
+        if (matches.length === 0) return [textBlock];
+
+        let lastIndex = 0;
+        for (const m of matches) {
+          const matchStr = m[0];
+          const idx = (m as any).index ?? -1;
+          if (idx > lastIndex) parts.push({ text: textBlock.slice(lastIndex, idx) });
+
+          // If the match contained a data URI (markdown image capture in group 2), prefer that
+          const dataUri = m[2] || (matchStr.startsWith('data:') ? matchStr : undefined);
+          if (dataUri) {
+            const dm = dataUri.match(/^data:([^;]+);base64,(.*)$/);
+            if (dm) parts.push({ inlineData: { mimeType: dm[1], data: dm[2] } });
+            else parts.push({ text: dataUri });
+          } else {
+            // Regular URL or non-data image - send as text so the model may fetch it.
+            parts.push({ text: matchStr });
+          }
+
+          lastIndex = idx + matchStr.length;
+        }
+        if (lastIndex < textBlock.length) parts.push({ text: textBlock.slice(lastIndex) });
+        return parts;
+      };
+
+      const requestParts: Array<string | any> = [systemPromptToUse];
+      requestParts.push(...parsePromptToParts(context));
+
+      const result = await model.generateContent(requestParts);
 
       const response = result.response;
       const text = response.text();

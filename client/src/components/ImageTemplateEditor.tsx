@@ -426,16 +426,93 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
 
   // Add History
   const addToHistory = (newElements: TemplateElement[], options?: { skipOnChange?: boolean }) => {
+    // Helper: compute a reasonable inline style string from element props so
+    // the Layers panel's inline-style textarea stays in sync with visual
+    // properties (color, gradient, shadow, borderRadius, font, etc.). We
+    // only set the style when the element has no explicit user-provided
+    // inline style to avoid overwriting manual edits.
+    const computeInline = (el: TemplateElement) => {
+      try {
+        if (el.type === 'shape') {
+          const s: any = el as any;
+          const parts: string[] = [
+            'position:absolute',
+            `left:${Math.round(el.x)}px`,
+            `top:${Math.round(el.y)}px`,
+            `width:${Math.round(el.width)}px`,
+            `height:${Math.round(el.height)}px`,
+          ];
+          if (s.gradient && s.gradient.enabled) {
+            const g = s.gradient as any;
+            if (g.type === 'linear') {
+              const stops = Array.isArray(g.stops) ? g.stops : [];
+              const p = stops.map((st: any) => `${st.color} ${Math.round((st.offset ?? 0) * 100)}%`);
+              const angle = typeof g.rotation === 'number' ? `${g.rotation}deg` : '0deg';
+              parts.push(`background:linear-gradient(${angle}, ${p.join(', ')})`);
+            } else {
+              const stops = Array.isArray(g.stops) ? g.stops : [];
+              const p = stops.map((st: any) => `${st.color} ${Math.round((st.offset ?? 0) * 100)}%`);
+              parts.push(`background:radial-gradient(circle, ${p.join(', ')})`);
+            }
+          } else if ((s as any).color) {
+            parts.push(`background:${(s as any).color}`);
+          }
+          if (typeof (s as any).borderRadius === 'number') parts.push(`border-radius:${Math.round((s as any).borderRadius)}px`);
+          if ((s as any).shadow && (s as any).shadow.enabled) {
+            const sh = (s as any).shadow as any;
+            const hex = (sh.color || '#000000').replace('#', '');
+            const r = parseInt(hex.substring(0, 2), 16);
+            const g = parseInt(hex.substring(2, 4), 16);
+            const b = parseInt(hex.substring(4, 6), 16);
+            const o = typeof sh.opacity === 'number' ? sh.opacity : 1;
+            parts.push(`box-shadow:${Math.round(sh.offsetX)}px ${Math.round(sh.offsetY)}px ${Math.round(sh.blur)}px rgba(${r},${g},${b},${o})`);
+          }
+          return parts.join(';');
+        }
+
+        if (el.type === 'text') {
+          const t: any = el as any;
+          const parts: string[] = [
+            'position:absolute',
+            `left:${Math.round(el.x)}px`,
+            `top:${Math.round(el.y)}px`,
+            `width:${Math.round(el.width)}px`,
+            `height:${Math.round(el.height)}px`,
+            `color:${t.color}`,
+            `font-size:${Math.round(t.fontSize)}px`,
+            `font-family:'${(t.fontFamily || 'Inter').replace(/'/g, "\\'")}'`,
+            `font-weight:${t.fontWeight || '400'}`,
+            `text-align:${t.textAlign || 'center'}`,
+            'display:flex',
+            'align-items:center',
+            'justify-content:center',
+          ];
+          return parts.join(';');
+        }
+      } catch (e) {
+        // Best-effort only
+      }
+      return (el as any).style || '';
+    };
+
+    const synced = newElements.map((el) => {
+      const computed = computeInline(el);
+      if (!el.style || el.style.trim().length === 0 || el.style === computed) {
+        return { ...el, style: computed } as TemplateElement;
+      }
+      return el;
+    });
+
     setHistory((prev) => {
       const nextHistory = prev.slice(0, historyStep + 1);
-      nextHistory.push(newElements);
+      nextHistory.push(synced);
       return nextHistory;
     });
     setHistoryStep((prevStep) => prevStep + 1);
     if (!options?.skipOnChange) {
-      onChange(newElements); // Propagate change when we intentionally want to rebuild from elements
+      onChange(synced); // Propagate change when we intentionally want to rebuild from elements
       // Also update the HTML layout for z-index changes
-      const newHtml = elementsToHtml(newElements, canvasSize);
+      const newHtml = elementsToHtml(synced, canvasSize);
       onHtmlLayoutChange?.(newHtml);
     }
   };
@@ -1588,6 +1665,24 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
               className="px-3 py-1 text-xs rounded bg-[#6b21a8] hover:bg-[#7c3aed] text-white ml-2"
               title="Open Claude Chat"
               onClick={() => {
+                if (selectedIds.length > 0) {
+                  // Describe the first selected element (quick-help)
+                  const el = elements.find((e) => e.id === selectedIds[0]);
+                  if (el) {
+                    const parts: string[] = [];
+                    parts.push(`Describe this element:`);
+                    parts.push(`Type: ${(el as any).type}`);
+                    if (el.name) parts.push(`Name: ${el.name}`);
+                    parts.push(`Position: ${Math.round(el.x)}, ${Math.round(el.y)}`);
+                    parts.push(`Size: ${Math.round(el.width)} x ${Math.round(el.height)}`);
+                    if ((el as any).color) parts.push(`Color: ${(el as any).color}`);
+                    if ((el as any).fontFamily) parts.push(`Font: ${(el as any).fontFamily}`);
+                    if ((el as any).content) parts.push(`Content: ${(el as any).content}`);
+                    const prompt = parts.join(' | ');
+                    onOpenClaudeChat?.(prompt);
+                    return;
+                  }
+                }
                 onOpenClaudeChat?.();
               }}
             >
@@ -2070,7 +2165,10 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                               .map(([k, v]) => `${k}:${v}`)
                               .join(';');
                             const nextHtml = updateHtmlRawStyle(htmlLayout, el.id, nextStyle);
+                            // Update the canonical HTML and also sync the element's stored
+                            // inline style so the Layers panel and controls reflect changes.
                             onHtmlLayoutChange(nextHtml);
+                            updateElement(el.id, { style: nextStyle } as any);
                           };
 
                           const display = getCss('display');

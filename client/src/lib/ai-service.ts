@@ -8,7 +8,10 @@ import {
   type AiActionsResponse,
 } from "./template-ai";
 import { normalizeLayoutTree } from "./layout-tree";
+import { getStoredProviderKey } from './ai-config';
+import { htmlToElements } from "./layout-html";
 import callPuterChat from "../lib/puter-client";
+import callClaudeChat from "./claude-client";
 import html2canvas from "html2canvas";
 
 type GenerateLayoutOptions = { strategy?: AIGenerationStrategy };
@@ -82,7 +85,7 @@ Do NOT return a full TemplateElement[] array.`;
 
 // Puter-specific rule set: be strict about returning only elements/actions in our schema.
 
-export type AIProvider = "gemini" | "ollama" | "huggingface" | "groq" | "puter";
+export type AIProvider = "gemini" | "ollama" | "huggingface" | "groq" | "puter" | "claude" | "openai" | "deepseek";
 
 export interface AIConfig {
   provider: AIProvider;
@@ -90,6 +93,13 @@ export interface AIConfig {
   ollamaUrl?: string;
   huggingfaceModel?: string;
   groqApiKey?: string;
+  claudeApiKey?: string;
+  // Optional per-provider selected models/metadata
+  geminiModel?: string;
+  openaiApiKey?: string;
+  openaiModel?: string;
+  deepseekApiKey?: string;
+  deepseekModel?: string;
 }
 
 export interface AIResponse {
@@ -104,6 +114,67 @@ class AIService {
     this.config = config;
   }
 
+  private async generateWithClaude(
+    systemPrompt: string,
+    userPrompt: string,
+    currentElements: TemplateElement[],
+    canvasWidth: number,
+    canvasHeight: number,
+    options?: GenerateLayoutOptions
+  ): Promise<TemplateElement[]> {
+    const apiKey = this.config.claudeApiKey || (typeof window !== 'undefined' && getStoredProviderKey('claude') as string) || '';
+    if (!apiKey) throw new Error('Claude API key is missing. Please add it in Settings ⚙️');
+
+    const strategy: AIGenerationStrategy = options?.strategy ?? 'full';
+
+    // Build a prompt body similar to other providers
+    const promptBody = `${systemPrompt}\n\nCanvas: ${canvasWidth}x${canvasHeight}\nCurrent elements: ${JSON.stringify(currentElements)}\n\nCommand: ${userPrompt}`;
+
+    try {
+      const result = await callClaudeChat(promptBody, apiKey, { model: (localStorage.getItem('claude_model') as string) || 'claude-3-opus' });
+
+      // Anthropic response shape may vary; attempt to extract text
+      const content = result?.completion || result?.output || result?.completion?.text || String(result);
+
+      if (strategy === 'schema') {
+        const obj = JSON.parse(extractJsonObject(content)) as AiActionsResponse;
+        const actions = Array.isArray((obj as any)?.actions) ? (obj as any).actions : [];
+        return applyAiActions(currentElements, actions, canvasWidth, canvasHeight, userPrompt);
+      }
+
+      // Try JSON first
+      const parsedJson = parseJsonElementsFromText(content, canvasWidth, canvasHeight);
+      if (parsedJson && parsedJson.length > 0) return parsedJson;
+
+      // Try array-style JSON
+      const jsonMatch = String(content).match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const raw = JSON.parse(jsonMatch[0]);
+        const fromTree = normalizeLayoutTree(raw, canvasWidth, canvasHeight);
+        if (fromTree.length > 0) return fromTree;
+        return normalizeAiOutput(raw, canvasWidth, canvasHeight);
+      }
+
+      // Try HTML parsing
+      try {
+        const parsedHtml = String(content).includes('```html') ? String(content).split('```html')[1].split('```')[0].trim() : String(content);
+        const parsedHtmlElements = parseHtmlElementsFromText(parsedHtml, canvasWidth, canvasHeight);
+        if (parsedHtmlElements && parsedHtmlElements.length > 0) return parsedHtmlElements;
+        if (typeof document !== 'undefined') {
+          const domParsed = htmlToElements(parsedHtml, canvasWidth, canvasHeight);
+          if (domParsed.length > 0) return domParsed;
+        }
+      } catch (err) {
+        console.warn('Failed to parse Claude output:', (err as any)?.message ?? String(err));
+      }
+
+      return currentElements;
+    } catch (error) {
+      console.error('Claude generation error', error);
+      return currentElements;
+    }
+  }
+
   async generateLayout(
     prompt: string,
     currentElements: TemplateElement[],
@@ -112,7 +183,7 @@ class AIService {
     options?: GenerateLayoutOptions,
     htmlLayout?: string,
   ): Promise<TemplateElement[]> {
-    const systemPrompt = this.getSystemPrompt(prompt);
+    const systemPrompt = this.buildSystemPrompt(canvasWidth, canvasHeight, htmlLayout ?? '', prompt);
 
     switch (this.config.provider) {
       case "puter":
@@ -124,7 +195,16 @@ class AIService {
           canvasHeight,
           options,
           htmlLayout
-          
+
+        );
+      case "claude":
+        return this.generateWithClaude(
+          systemPrompt,
+          prompt,
+          currentElements,
+          canvasWidth,
+          canvasHeight,
+          options
         );
       case "ollama":
         return this.generateWithOllama(
@@ -153,6 +233,24 @@ class AIService {
           canvasHeight,
           options
         );
+      case "openai":
+        return this.generateWithOpenAI(
+          systemPrompt,
+          prompt,
+          currentElements,
+          canvasWidth,
+          canvasHeight,
+          options
+        );
+      case "deepseek":
+        return this.generateWithDeepSeek(
+          systemPrompt,
+          prompt,
+          currentElements,
+          canvasWidth,
+          canvasHeight,
+          options
+        );
       case "gemini":
       default:
         return this.generateWithGemini(
@@ -162,8 +260,156 @@ class AIService {
           currentElements,
           canvasWidth,
           canvasHeight,
-          options
+          options,
+          htmlLayout
         );
+    }
+  }
+
+  private async generateWithOpenAI(
+    systemPrompt: string,
+    userPrompt: string,
+    currentElements: TemplateElement[],
+    canvasWidth: number,
+    canvasHeight: number,
+    options?: GenerateLayoutOptions
+  ): Promise<TemplateElement[]> {
+    const apiKey = this.config.openaiApiKey || (typeof window !== 'undefined' && getStoredProviderKey('openai') as string) || '';
+    if (!apiKey) throw new Error('OpenAI API key is missing. Please add it in Settings ⚙️');
+
+    const model = this.config.openaiModel || (typeof window !== 'undefined' && localStorage.getItem('openai_model')) || 'gpt-4o-mini';
+
+    const strategy: AIGenerationStrategy = options?.strategy ?? 'full';
+
+    const messages =
+      strategy === 'schema'
+        ? [
+            { role: 'system', content: ACTIONS_PROVIDER_SYSTEM_PROMPT },
+            { role: 'user', content: `Canvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(summarizeElementsForPrompt(currentElements))}\n\nCommand: ${userPrompt}` },
+          ]
+        : [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: `Canvas: ${canvasWidth}x${canvasHeight}\nCurrent elements: ${JSON.stringify(currentElements)}\n\nCommand: ${userPrompt}` },
+          ];
+
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, messages }),
+      });
+
+      if (!response.ok) throw new Error(`OpenAI API error: ${response.status}`);
+
+      const data = await response.json();
+      const content = data?.choices?.[0]?.message?.content ?? String(data);
+
+      if (strategy === 'schema') {
+        const obj = JSON.parse(extractJsonObject(content)) as AiActionsResponse;
+        const actions = Array.isArray((obj as any)?.actions) ? (obj as any).actions : [];
+        return applyAiActions(currentElements, actions, canvasWidth, canvasHeight, userPrompt);
+      }
+
+      const parsedJson = parseJsonElementsFromText(content, canvasWidth, canvasHeight);
+      if (parsedJson && parsedJson.length > 0) return parsedJson;
+
+      const jsonMatch = String(content).match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const raw = JSON.parse(jsonMatch[0]);
+        const fromTree = normalizeLayoutTree(raw, canvasWidth, canvasHeight);
+        if (fromTree.length > 0) return fromTree;
+        return normalizeAiOutput(raw, canvasWidth, canvasHeight);
+      }
+
+      try {
+        const parsedHtml = String(content).includes('```html') ? String(content).split('```html')[1].split('```')[0].trim() : String(content);
+        const parsedHtmlElements = parseHtmlElementsFromText(parsedHtml, canvasWidth, canvasHeight);
+        if (parsedHtmlElements && parsedHtmlElements.length > 0) return parsedHtmlElements;
+        if (typeof document !== 'undefined') {
+          const domParsed = htmlToElements(parsedHtml, canvasWidth, canvasHeight);
+          if (domParsed.length > 0) return domParsed;
+        }
+      } catch (err) {
+        console.warn('Failed to parse OpenAI output:', (err as any)?.message ?? String(err));
+      }
+
+      return currentElements;
+    } catch (error) {
+      console.error('OpenAI generation error', error);
+      return currentElements;
+    }
+  }
+
+  private async generateWithDeepSeek(
+    systemPrompt: string,
+    userPrompt: string,
+    currentElements: TemplateElement[],
+    canvasWidth: number,
+    canvasHeight: number,
+    options?: GenerateLayoutOptions
+  ): Promise<TemplateElement[]> {
+    const apiKey = this.config.deepseekApiKey || (typeof window !== 'undefined' && getStoredProviderKey('deepseek') as string) || '';
+    if (!apiKey) throw new Error('DeepSeek API key is missing. Please add it in Settings ⚙️');
+
+    const base = 'https://api.deepseek.com';
+    const model = this.config.deepseekModel || (typeof window !== 'undefined' && localStorage.getItem('deepseek_model')) || 'deepseek-chat';
+
+    const strategy: AIGenerationStrategy = options?.strategy ?? 'full';
+
+    const messages =
+      strategy === 'schema'
+        ? [{ role: 'user', content: `Canvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(summarizeElementsForPrompt(currentElements))}\n\nCommand: ${userPrompt}` }]
+        : [{ role: 'user', content: systemPrompt }, { role: 'user', content: `Canvas: ${canvasWidth}x${canvasHeight}\nCurrent elements: ${JSON.stringify(currentElements)}\n\nCommand: ${userPrompt}` }];
+
+    try {
+      // Use server-side proxy for DeepSeek to avoid exposing keys from the client
+      const response = await fetch('/api/ai/deepseek', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, messages }),
+      });
+
+      if (!response.ok) {
+        const txt = await response.text();
+        throw new Error(`DeepSeek proxy error: ${response.status} ${txt}`);
+      }
+
+      const data = await response.json();
+      const content = data?.content ?? String(data);
+
+      if (strategy === 'schema') {
+        const obj = JSON.parse(extractJsonObject(content)) as AiActionsResponse;
+        const actions = Array.isArray((obj as any)?.actions) ? (obj as any).actions : [];
+        return applyAiActions(currentElements, actions, canvasWidth, canvasHeight, userPrompt);
+      }
+
+      const parsedJson = parseJsonElementsFromText(content, canvasWidth, canvasHeight);
+      if (parsedJson && parsedJson.length > 0) return parsedJson;
+
+      const jsonMatch = String(content).match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const raw = JSON.parse(jsonMatch[0]);
+        const fromTree = normalizeLayoutTree(raw, canvasWidth, canvasHeight);
+        if (fromTree.length > 0) return fromTree;
+        return normalizeAiOutput(raw, canvasWidth, canvasHeight);
+      }
+
+      try {
+        const parsedHtml = String(content).includes('```html') ? String(content).split('```html')[1].split('```')[0].trim() : String(content);
+        const parsedHtmlElements = parseHtmlElementsFromText(parsedHtml, canvasWidth, canvasHeight);
+        if (parsedHtmlElements && parsedHtmlElements.length > 0) return parsedHtmlElements;
+        if (typeof document !== 'undefined') {
+          const domParsed = htmlToElements(parsedHtml, canvasWidth, canvasHeight);
+          if (domParsed.length > 0) return domParsed;
+        }
+      } catch (err) {
+        console.warn('Failed to parse DeepSeek output:', (err as any)?.message ?? String(err));
+      }
+
+      return currentElements;
+    } catch (error) {
+      console.error('DeepSeek generation error', error);
+      return currentElements;
     }
   }
 
@@ -172,6 +418,92 @@ class AIService {
     // This method is kept for backwards compatibility but returns null
     // so the generateLayout function in gemini.ts uses its own SYSTEM_PROMPT
     return "";
+  }
+
+  /**
+   * Build the canonical SYSTEM_PROMPT used across all providers.
+   * This centralizes rules about canvas size, allowed tags, and output format.
+   */
+  private buildSystemPrompt(
+    canvasWidth: number,
+    canvasHeight: number,
+    currentHtml: string,
+    userPrompt: string
+  ): string {
+    return `You are a STRICT, OUTPUT-ONLY assistant for an ABSOLUTE-POSITION CANVAS DESIGN TOOL.
+
+Your task is to generate or update a visual layout based on the user request.
+
+=====================
+INPUT VARIABLES
+=====================
+Canvas size (EXACT): ${canvasWidth}px × ${canvasHeight}px
+Existing HTML (may be empty): 
+${currentHtml}
+
+User request:
+${userPrompt}
+
+=====================
+OUTPUT RULES (MANDATORY)
+=====================
+- Return ONLY valid HTML (NO explanations, NO markdown, NO code blocks).
+- Output MUST be a SINGLE root <div> with 'position: relative'.
+- ALL child elements MUST be '<div>' elements with 'position: absolute'.
+- Do NOT include <html>, <head>, <body>, <style>, <script>, <span>, or any other tags.
+- Do NOT use flex, grid, containers, or children nesting.
+- Do NOT nest divs inside absolute divs.
+- Coordinates use PIXELS with a top-left origin.
+- ALL elements MUST fit fully inside the canvas.
+- Root div size MUST be exactly ${canvasWidth}px × ${canvasHeight}px.
+
+=====================
+ELEMENT RULES
+=====================
+- Every absolute div MUST have a unique 'id'.
+- Text must be placed directly inside its own absolute div.
+- Images must be placed inside their own absolute div using '<img>':
+  - Image source must be BASE64 only.
+- SVGs:
+  - Must be inside their own absolute div.
+  - Must be centered and scaled to fit within that div.
+- A single div MAY be used as a visual element (shape, gradient, glow, etc.).
+- Shadows, gradients, blur, and visual effects are allowed.
+- Use modern design principles:
+  - Contrast
+  - Visual hierarchy
+  - Whitespace
+  - Readability
+  - Strong visual impact
+- Design should be suitable for:
+  - Marketing banners
+  - Social media posts
+  - Ads
+  - Promotional creatives
+
+=====================
+UPDATE RULES
+=====================
+- If ${currentHtml} is NOT empty:
+  - Preserve existing good elements.
+  - Modify or improve layout ONLY as requested.
+  - Reference existing elements ONLY by their 'id'.
+- If ${currentHtml} is empty:
+  - Create a NEW layout from scratch.
+
+=====================
+ABSOLUTE CONSTRAINTS
+=====================
+- This is an ABSOLUTE-POSITION CANVAS. NO layout systems.
+- NO nested divs.
+- NO overflow outside canvas.
+- NO extra text before or after HTML. 
+
+=====================
+FINAL INSTRUCTION
+=====================
+Return ONLY the COMPLETE HTML structure that satisfies ALL rules above.
+`;
   }
 
   private async generateWithGemini(
@@ -183,53 +515,29 @@ class AIService {
     canvasHeight: number,
     options?: GenerateLayoutOptions,
     currentHtml?: string,
-
   ): Promise<TemplateElement[]> {
     if (!apiKey || apiKey.trim() === "") {
       throw new Error("Gemini API Key is missing. Please add it in Settings ⚙️");
     }
     const { generateLayout } = await import("./gemini");
-    // Don't pass systemPrompt - let generateLayout use its own SYSTEM_PROMPT
-       const PUTER_ELEMENTS_SYSTEM_PROMPT = `You are a strict output-only assistant for a CANVAS design tool. When asked to generate layout elements, you MUST respond using ONE of the following formats ONLY (no extra text, no explanation):
-- Create a relative div with absolute divs inside
-- Don't use nested divs in absolute divs
-- Don't include html, body, or head tags
-- all elements must be absolutely positioned inside a single relative div
-- add id attributes to each absolute div for element identification
-- Play with coordinates using left, right, top, bottom properties
-- Can apply shadows, effects, gradients
-- Can use text
-- SVG(should be centered in div and scaled to fit inside the div properly), single div (as design element), or 
-- image (base64 in src) inside absolute divs
-- Size: ${canvasWidth}x${canvasHeight}px (exactly this canvas size)
-- Focus on visual impact, readability, and engagement
-- Use modern design principles: contrast, hierarchy, whitespace
-- create visually appealing layouts for marketing banners, social media posts, ads, etc.
-- add shapes, icons, images to enhance the design
-- dont't use flex/container layout or children nesting.
-- Coordinates are in PIXELS (top-left origin). All elements MUST fit within the canvas.
-- When updating, reference existing elements ONLY by the provided ids.
-
-Critical constraints (must follow):
--HTML structure for the design (no explanations, no code blocks). The HTML should be a single div with position: relative containing absolutely positioned child elements.
-- dont use nested divs in absolute divs.
-- seprarate images and svgs into their own divs, text, don't use span or other tags create each element separately.
-- If modifying existing design, preserve elements and improve based on the request.
-- This tool is ABSOLUTE-POSITION CANVAS. Do NOT use flex/container layout or children nesting.
-- Coordinates are in PIXELS (top-left origin). All elements MUST fit within the canvas.
-- When updating, reference existing elements ONLY by the provided ids.
-
-Current HTML layout (modify this if it exists, or create new if empty):
-${currentHtml}
-
-User request: ${userPrompt}
-
-H
-Current HTML layout (modify this if it exists, or create new if empty):
-${currentHtml}
-
-User request: ${userPrompt} Return ONLY the complete HTML structure for the design (no explanations, no code blocks). The HTML should be a single div with position: relative containing absolutely positioned child elements. If modifying existing design, preserve good elements and improve based on the request.TML should be a single div with position: relative containing absolutely positioned child elements. If modifying existing design, preserve good elements and improve based on the request.`;
-    return generateLayout(apiKey, userPrompt, currentElements, canvasWidth, canvasHeight, PUTER_ELEMENTS_SYSTEM_PROMPT, options);
+    // Prefer configured model from AIConfig or localStorage
+    const geminiModel = this.config.geminiModel || (typeof window !== 'undefined' && localStorage.getItem('gemini_model')) || undefined;
+    // Use the centralized system prompt for Gemini generation
+    console.log(systemPrompt, userPrompt, { preferredModel: geminiModel });
+    const res = await generateLayout(apiKey, userPrompt, currentElements, canvasWidth, canvasHeight, systemPrompt, options, geminiModel);
+    if (typeof res === 'string') {
+      // Try to parse returned HTML/JSON into TemplateElements (server-side parser first)
+      const parsedJson = parseJsonElementsFromText(res, canvasWidth, canvasHeight);
+      if (parsedJson && parsedJson.length > 0) return parsedJson;
+      const parsedHtml = parseHtmlElementsFromText(res, canvasWidth, canvasHeight);
+      if (parsedHtml && parsedHtml.length > 0) return parsedHtml;
+      if (typeof document !== 'undefined') {
+        const domParsed = htmlToElements(res, canvasWidth, canvasHeight);
+        if (domParsed && domParsed.length > 0) return domParsed;
+      }
+      return currentElements;
+    }
+    return res;
   }
 
   private async generateWithPuter(
@@ -241,100 +549,72 @@ User request: ${userPrompt} Return ONLY the complete HTML structure for the desi
     options?: GenerateLayoutOptions,
     currentHtml?: string,
   ): Promise<TemplateElement[]> {
-        const strategy: AIGenerationStrategy = options?.strategy ?? "full";
+    const strategy: AIGenerationStrategy = options?.strategy ?? "full";
 
-        const PUTER_ELEMENTS_SYSTEM_PROMPT = `You are a strict output-only assistant for a CANVAS design tool. When asked to generate layout elements, you MUST respond using ONE of the following formats ONLY (no extra text, no explanation):
-- Create a relative div with absolute divs inside
-- Don't use nested divs in absolute divs
-- Don't include html, body, or head tags
-- all elements must be absolutely positioned inside a single relative div
-- add id attributes to each absolute div for element identification
-- Play with coordinates using left, right, top, bottom properties
-- Can apply shadows, effects, gradients
-- Can use text
-- SVG(should be centered in div and scaled to fit inside the div properly), single div (as design element), or 
-- image (base64 in src) inside absolute divs
-- Size: ${canvasWidth}x${canvasHeight}px (exactly this canvas size)
-- Focus on visual impact, readability, and engagement
-- Use modern design principles: contrast, hierarchy, whitespace
-- create visually appealing layouts for marketing banners, social media posts, ads, etc.
-- add shapes, icons, images to enhance the design
-- dont't use flex/container layout or children nesting.
-- Coordinates are in PIXELS (top-left origin). All elements MUST fit within the canvas.
-- When updating, reference existing elements ONLY by the provided ids.
+    // Determine model from localStorage (UI stores this in settings when enabling Puter)
+    const model = (typeof window !== 'undefined' && localStorage.getItem('puter_model')) || 'claude-sonnet-4-5';
 
-Critical constraints (must follow):
--HTML structure for the design (no explanations, no code blocks). The HTML should be a single div with position: relative containing absolutely positioned child elements.
-- dont use nested divs in absolute divs.
-- seprarate images and svgs into their own divs, text, don't use span or other tags create each element separately.
-- If modifying existing design, preserve elements and improve based on the request.
-- This tool is ABSOLUTE-POSITION CANVAS. Do NOT use flex/container layout or children nesting.
-- Coordinates are in PIXELS (top-left origin). All elements MUST fit within the canvas.
-- When updating, reference existing elements ONLY by the provided ids.
+    const baseInstructions = strategy === 'schema' ? ACTIONS_PROVIDER_SYSTEM_PROMPT : systemPrompt;
+    const promptBody = `${systemPrompt}\n\nCanvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(
+      summarizeElementsForPrompt(currentElements)
+    )}\n\nCommand: ${userPrompt}`;
 
-Current HTML layout (modify this if it exists, or create new if empty):
-${currentHtml}
+    try {
+      const resp: any = await callPuterChat(promptBody, { model, stream: false });
+      // Puter responses may nest the message in different places depending on SDK/format.
+      // Handle both `resp.message.content[0].text` and `resp.result.message.content[0].text`.
+      const content =
+        resp?.message?.content?.[0]?.text ?? resp?.result?.message?.content?.[0]?.text ?? String(resp ?? "");
 
-User request: ${userPrompt}
+      if (strategy === 'schema') {
+        const obj = JSON.parse(extractJsonObject(content)) as AiActionsResponse;
+        const actions = Array.isArray((obj as any)?.actions) ? (obj as any).actions : [];
+        return applyAiActions(currentElements, actions, canvasWidth, canvasHeight, userPrompt);
+      }
 
-H
-Current HTML layout (modify this if it exists, or create new if empty):
-${currentHtml}
+      // Try JSON parsing first (includes ```json code fences or bare objects/arrays)
+      const parsedJson = parseJsonElementsFromText(content, canvasWidth, canvasHeight);
+      if (parsedJson && parsedJson.length > 0) return parsedJson;
 
-User request: ${userPrompt} Return ONLY the complete HTML structure for the design (no explanations, no code blocks). The HTML should be a single div with position: relative containing absolutely positioned child elements. If modifying existing design, preserve good elements and improve based on the request.TML should be a single div with position: relative containing absolutely positioned child elements. If modifying existing design, preserve good elements and improve based on the request.`;
+      // Try to parse an array-style response (layout tree)
+      const jsonMatch = content.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const raw = JSON.parse(jsonMatch[0]);
+        const fromTree = normalizeLayoutTree(raw, canvasWidth, canvasHeight);
+        if (fromTree.length > 0) return fromTree;
+        return normalizeAiOutput(raw, canvasWidth, canvasHeight);
+      }
 
-        // Determine model from localStorage (UI stores this in settings when enabling Puter)
-        const model = (typeof window !== 'undefined' && localStorage.getItem('puter_model')) || 'claude-sonnet-4-5';
 
-        const baseInstructions = strategy === 'schema' ? ACTIONS_PROVIDER_SYSTEM_PROMPT : systemPrompt;
-        const promptBody = `${PUTER_ELEMENTS_SYSTEM_PROMPT}\n\nCanvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(
-          summarizeElementsForPrompt(currentElements)
-        )}\n\nCommand: ${userPrompt}`;
+      // Also attempt to parse simple HTML snippets (Puter often returns HTML code fences)
+      try {
+        // unwrap code fence if present
+        const parsedHtml = content.includes('```html')
+          ? content.split('```html')[1].split('```')[0].trim()
+          : content;
 
-        try {
-          const resp: any = await callPuterChat(promptBody, { model, stream: false });
-          // Puter responses may nest the message in different places depending on SDK/format.
-          // Handle both `resp.message.content[0].text` and `resp.result.message.content[0].text`.
-          const content =
-            resp?.message?.content?.[0]?.text ?? resp?.result?.message?.content?.[0]?.text ?? String(resp ?? "");
+        // First, try our HTML->TemplateElement parser (works in Node too)
+        const parsedHtmlElements = parseHtmlElementsFromText(parsedHtml, canvasWidth, canvasHeight);
+        if (parsedHtmlElements && parsedHtmlElements.length > 0) return parsedHtmlElements;
 
-          if (strategy === 'schema') {
-            const obj = JSON.parse(extractJsonObject(content)) as AiActionsResponse;
-            const actions = Array.isArray((obj as any)?.actions) ? (obj as any).actions : [];
-            return applyAiActions(currentElements, actions, canvasWidth, canvasHeight, userPrompt);
-          }
-
-          // Try JSON parsing first (includes ```json code fences or bare objects/arrays)
-          const parsedJson = parseJsonElementsFromText(content, canvasWidth, canvasHeight);
-          if (parsedJson && parsedJson.length > 0) return parsedJson;
-
-          // Try to parse an array-style response (layout tree)
-          const jsonMatch = content.match(/\[[\s\S]*\]/);
-          if (jsonMatch) {
-            const raw = JSON.parse(jsonMatch[0]);
-            const fromTree = normalizeLayoutTree(raw, canvasWidth, canvasHeight);
-            if (fromTree.length > 0) return fromTree;
-            return normalizeAiOutput(raw, canvasWidth, canvasHeight);
-          }
-
-          // Also attempt to parse simple HTML snippets (Puter often returns HTML code fences)
-          console.log("Puter content for HTML parsing:", content);
-          //const htmlLike = /<\/?(div|img)\b/i.test(content) || /```html/.test(content);
-          //if (htmlLike) {
-            const parsed =content.includes('```html')
-            ? content.split('```html')[1].split('```')[0].trim()
-            : content;
-            return parsed;
-            const parsedHtmlElements = parseHtmlElementsFromText(parsed, canvasWidth, canvasHeight);
-            if (parsedHtmlElements && parsedHtmlElements.length > 0) return parsedHtmlElements;
-          //}
-
-          return currentElements;
-        } catch (error) {
-          console.error('Puter generation error', error);
-          return currentElements;
+        // If running in a browser, try a DOM-based parser for better fidelity
+        if (typeof document !== 'undefined') {
+          const domParsed = htmlToElements(parsedHtml, canvasWidth, canvasHeight);
+          if (domParsed.length > 0) return domParsed;
         }
+      } catch (e) {
+        console.warn('Failed to parse Puter HTML output:', (e as any)?.message ?? String(e));
+      }
+
+      // If no parsing succeeded, return the current elements unchanged.
+      return currentElements;
+
+      return currentElements;
+    } catch (error) {
+      console.error('Puter generation error', error);
+      return currentElements;
     }
+  }
   private async generateWithOllama(
     systemPrompt: string,
     userPrompt: string,
@@ -351,23 +631,23 @@ User request: ${userPrompt} Return ONLY the complete HTML structure for the desi
     const messages =
       strategy === "schema"
         ? [
-            { role: "system", content: ACTIONS_PROVIDER_SYSTEM_PROMPT },
-            {
-              role: "user",
-              content: `Canvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(
-                summarizeElementsForPrompt(currentElements)
-              )}\n\nCommand: ${userPrompt}`,
-            },
-          ]
+          { role: "system", content: ACTIONS_PROVIDER_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: `Canvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(
+              summarizeElementsForPrompt(currentElements)
+            )}\n\nCommand: ${userPrompt}`,
+          },
+        ]
         : [
-            { role: "system", content: systemPrompt },
-            {
-              role: "user",
-              content: `Canvas: ${canvasWidth}x${canvasHeight}\nCurrent elements: ${JSON.stringify(
-                currentElements
-              )}\n\nCommand: ${userPrompt}`,
-            },
-          ];
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: `Canvas: ${canvasWidth}x${canvasHeight}\nCurrent elements: ${JSON.stringify(
+              currentElements
+            )}\n\nCommand: ${userPrompt}`,
+          },
+        ];
 
     try {
       const response = await fetch(`${ollamaUrl}/api/chat`, {
@@ -421,23 +701,23 @@ User request: ${userPrompt} Return ONLY the complete HTML structure for the desi
     const messages =
       strategy === "schema"
         ? [
-            { role: "system", content: ACTIONS_PROVIDER_SYSTEM_PROMPT },
-            {
-              role: "user",
-              content: `Canvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(
-                summarizeElementsForPrompt(currentElements)
-              )}\n\nCommand: ${userPrompt}`,
-            },
-          ]
+          { role: "system", content: ACTIONS_PROVIDER_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: `Canvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(
+              summarizeElementsForPrompt(currentElements)
+            )}\n\nCommand: ${userPrompt}`,
+          },
+        ]
         : [
-            { role: "user", content: systemPrompt },
-            {
-              role: "user",
-              content: `Canvas: ${canvasWidth}x${canvasHeight}\nCurrent elements: ${JSON.stringify(
-                currentElements
-              )}\n\nCommand: ${userPrompt}`,
-            },
-          ];
+          { role: "user", content: systemPrompt },
+          {
+            role: "user",
+            content: `Canvas: ${canvasWidth}x${canvasHeight}\nCurrent elements: ${JSON.stringify(
+              currentElements
+            )}\n\nCommand: ${userPrompt}`,
+          },
+        ];
 
     try {
       const response = await fetch(
@@ -496,23 +776,23 @@ User request: ${userPrompt} Return ONLY the complete HTML structure for the desi
     const messages =
       strategy === "schema"
         ? [
-            { role: "system", content: ACTIONS_PROVIDER_SYSTEM_PROMPT },
-            {
-              role: "user",
-              content: `Canvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(
-                summarizeElementsForPrompt(currentElements)
-              )}\n\nCommand: ${userPrompt}`,
-            },
-          ]
+          { role: "system", content: ACTIONS_PROVIDER_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: `Canvas: ${canvasWidth}x${canvasHeight}\nExisting element summary: ${JSON.stringify(
+              summarizeElementsForPrompt(currentElements)
+            )}\n\nCommand: ${userPrompt}`,
+          },
+        ]
         : [
-            { role: "system", content: systemPrompt },
-            {
-              role: "user",
-              content: `Canvas: ${canvasWidth}x${canvasHeight}\nCurrent elements: ${JSON.stringify(
-                currentElements
-              )}\n\nCommand: ${userPrompt}`,
-            },
-          ];
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: `Canvas: ${canvasWidth}x${canvasHeight}\nCurrent elements: ${JSON.stringify(
+              currentElements
+            )}\n\nCommand: ${userPrompt}`,
+          },
+        ];
 
     try {
       const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -564,25 +844,8 @@ User request: ${userPrompt} Return ONLY the complete HTML structure for the desi
     canvasWidth: number = 1280,
     canvasHeight: number = 720
   ): Promise<string> {
-    const DESIGN_SYSTEM_PROMPT = `You are a professional graphic designer. Create stunning visual designs for various purposes.
-
-RULES FOR CREATION:
-- Create a relative div with absolute divs inside
-- Don't use multi-nested divs in absolute divs
-- Don't include html, body, or head tags
-- Play with coordinates using left, right, top, bottom properties
-- Can apply shadows, effects, gradients
-- Can use text, SVG(should be centered in div and scaled to fit inside the div properly), single div (as design element), or image (base64 in src) inside absolute divs
-- Size: ${canvasWidth}x${canvasHeight}px (exactly this canvas size)
-- Focus on visual impact, readability, and engagement
-- Use modern design principles: contrast, hierarchy, whitespace
-
-Current HTML layout (modify this if it exists, or create new if empty):
-${currentHtml}
-
-User request: ${userPrompt}
-
-Return ONLY the complete HTML structure for the design (no explanations, no code blocks). The HTML should be a single div with position: relative containing absolutely positioned child elements. If modifying existing design, preserve good elements and improve based on the request.`;
+    // Use the centralized system prompt so design generation follows the same rules as other providers
+    const DESIGN_SYSTEM_PROMPT = this.buildSystemPrompt(canvasWidth, canvasHeight, currentHtml, userPrompt);
 
     try {
       const enabled = localStorage.getItem('puter_enabled') === '1';

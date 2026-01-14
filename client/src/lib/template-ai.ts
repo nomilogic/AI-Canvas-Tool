@@ -1,4 +1,8 @@
 import { z } from "zod";
+import { unified } from "unified";
+import rehypeParse from "rehype-parse";
+import valueParser from "postcss-value-parser";
+import { parse as parseSvg } from "svgson";
 import type {
   TemplateElement,
   TextElement,
@@ -11,6 +15,7 @@ import type {
 } from "../types/templates";
 
 // Note: The AI is not always reliable. This module:
+    const _rawOut: any[] = [];
 // - extracts/validates a TemplateElement[]
 // - fills defaults required by the editor
 // - clamps geometry into the canvas bounds
@@ -47,11 +52,9 @@ const zShadowProps: z.ZodType<ShadowProps> = z
 
 const zGradientProps: z.ZodType<GradientProps> = z
   .object({
-    enabled: z.coerce.boolean(),
     type: z.enum(["linear", "radial"]),
     stops: z
       .array(z.object({ offset: zNumber, color: z.string() }))
-      .min(2)
       .max(6),
     start: z.object({ x: zNumber, y: zNumber }),
     end: z.object({ x: zNumber, y: zNumber }),
@@ -98,224 +101,107 @@ const zText = zTemplateBase.extend({
 });
 
 const zShape = zTemplateBase.extend({
+  // Our runtime shape elements use `type: 'shape'` and a `shape` property
   type: z.literal("shape"),
-  shape: z.enum([
-    "rectangle",
-    "circle",
-    "line",
-    "star",
-    "triangle",
-    "diamond",
-    "pentagon",
-    "hexagon",
-    "octagon",
-    "rounded-rectangle",
-  ]),
-  color: z.string().default("#3b82f6"),
-  opacity: zOptionalNumber,
+  shape: z
+    .enum([
+      "rectangle",
+      "circle",
+      "line",
+      "star",
+      "triangle",
+      "diamond",
+      "pentagon",
+      "hexagon",
+      "octagon",
+      "rounded-rectangle",
+    ])
+    .optional(),
+  color: z.string().optional(),
   borderRadius: zOptionalNumber,
-  borderWidth: zOptionalNumber,
-  borderColor: z.string().optional(),
   gradient: zGradientProps.optional(),
-});
+  opacity: zOptionalNumber,
+})
+.passthrough();
 
 const zLogo = zTemplateBase.extend({
-  type: z.enum(["logo", "image"]),
-  // AI sometimes forgets to include src; we'll fill it with a placeholder later.
-  src: z.string().optional(),
-  opacity: zOptionalNumber,
-  borderRadius: zOptionalNumber,
-  borderColor: z.string().optional(),
-  borderWidth: zOptionalNumber,
-});
+  type: z.literal("logo"),
+  src: z.string().default("")
+}).passthrough();
 
 const zSvg = zTemplateBase.extend({
   type: z.literal("svg"),
   content: z.string(),
+  viewBox: z.string().optional(),
   fill: z.string().optional(),
   stroke: z.string().optional(),
   strokeWidth: zOptionalNumber,
-  opacity: zOptionalNumber,
-});
+}).passthrough();
 
-const zIcon = zTemplateBase.extend({
-  type: z.literal("icon"),
-  iconName: z.string(),
-  color: z.string().optional(),
-  opacity: zOptionalNumber,
-});
+const zTemplateElement = z.discriminatedUnion("type", [zText, zShape, zLogo, zSvg]);
 
-function extractPathDataFromSvgMarkup(markup: string): string | null {
-  if (!markup) return null;
-  const s = String(markup);
-
-  // Collect all d="..." occurrences and join into one compound path.
-  // Avoid String.matchAll for TS downlevel compatibility.
-  const re = /d=("([^"]+)"|'([^']+)')/g;
-  const parts: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(s)) !== null) {
-    const d = m[2] ?? m[3];
-    if (typeof d === "string" && d.trim().length > 0) parts.push(d);
-  }
-
-  if (parts.length === 0) return null;
-  return parts.join(" ");
-}
-
-function coerceSvgContent(item: any): any {
-  if (!item || typeof item !== "object") return item;
-  if (item.type !== "svg") return item;
-
-  // common alternative key
-  if (!item.content && typeof item.d === "string") {
-    return { ...item, content: item.d };
-  }
-
-  // paths array
-  if (!item.content && Array.isArray(item.paths)) {
-    const joined = item.paths
-      .map((p: any) => p?.d)
-      .filter((d: any) => typeof d === "string" && d.trim().length > 0)
-      .join(" ");
-    if (joined) return { ...item, content: joined };
-  }
-
-  // full <svg> markup pasted into content
-  if (typeof item.content === "string" && item.content.includes("<")) {
-    const extracted = extractPathDataFromSvgMarkup(item.content);
-    if (extracted) return { ...item, content: extracted };
-  }
-
-  return item;
-}
-
-function coerceImageContent(item: any): any {
-  if (!item || typeof item !== "object") return item;
-  if (item.type !== "image" && item.type !== "logo") return item;
-
-  // Normalize type: we treat "logo" as an "image" in the editor.
-  const normalizedType = item.type === "logo" ? "image" : item.type;
-
-  // Common AI variants for the URL field
-  const candidate =
-    item.src ??
-    item.url ??
-    item.imageUrl ??
-    item.imageURL ??
-    item.image ??
-    item.dataUri ??
-    item.dataURI;
-
-  // Base64 variant (sometimes returned without a data: prefix)
-  const base64 = item.base64 ?? item.pngBase64 ?? item.png_base64;
-
-  if (typeof candidate === "string" && candidate.trim().length > 0) {
-    return { ...item, type: normalizedType, src: candidate };
-  }
-
-  if (typeof base64 === "string" && base64.trim().length > 0) {
-    const s = base64.trim();
-    const src = s.startsWith("data:image/") ? s : `data:image/png;base64,${s}`;
-    return { ...item, type: normalizedType, src };
-  }
-
-  // Leave src undefined here; downstream will fill it with a placeholder.
-  return { ...item, type: normalizedType };
-}
-
-function coerceAiItem(item: any): any {
-  return coerceImageContent(coerceSvgContent(item));
-}
-
-const zTemplateElement = z.discriminatedUnion("type", [zText, zShape, zLogo, zSvg, zIcon]);
-
-function clamp(n: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, n));
-}
+// Lightweight legacy element type (older outputs may use a different schema)
+export type LegacyCanvasElement = any;
 
 function ensureId(id: string | undefined) {
-  // crypto.randomUUID is available in modern browsers
-  return id && id.trim().length > 0 ? id : crypto.randomUUID();
+  return typeof id === "string" && id.trim().length > 0 ? id : crypto.randomUUID();
 }
 
 function ensureZIndex(zIndex: number | undefined, idx: number) {
-  return Number.isFinite(zIndex) ? (zIndex as number) : idx;
+  return typeof zIndex === "number" ? zIndex : idx;
 }
-
-function normalizeGeometry(el: TemplateElement, canvasWidth: number, canvasHeight: number): TemplateElement {
-  const width = clamp(el.width, 1, canvasWidth);
-  const height = clamp(el.height, 1, canvasHeight);
-  const x = clamp(el.x, 0, Math.max(0, canvasWidth - width));
-  const y = clamp(el.y, 0, Math.max(0, canvasHeight - height));
-
-  return {
-    ...el,
-    x,
-    y,
-    width,
-    height,
-  };
-}
-
-// Legacy CanvasElement (older AI prompt/schema)
-// This is best-effort: containers are converted into a background rect + laid-out children.
-export type LegacyCanvasElement = {
-  id?: string;
-  type: "rect" | "circle" | "text" | "image" | "container";
-  x?: number;
-  y?: number;
-  width?: number | string;
-  height?: number | string;
-  radius?: number;
-  fill?: string;
-  text?: string;
-  fontSize?: number;
-  rotation?: number;
-  opacity?: number;
-  layout?: "flex" | "absolute";
-  direction?: "row" | "column";
-  gap?: number;
-  align?: "start" | "center" | "end";
-  justify?: "start" | "center" | "end" | "between";
-  padding?: number;
-  children?: LegacyCanvasElement[];
-};
 
 function parseSize(value: number | string | undefined, fallback: number, total: number): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "number") return value;
   if (typeof value === "string") {
     const s = value.trim();
-    if (s.endsWith("%")) {
-      const pct = Number.parseFloat(s.slice(0, -1));
-      if (Number.isFinite(pct)) return (pct / 100) * total;
-    }
-    const n = Number.parseFloat(s);
-    if (Number.isFinite(n)) return n;
+    const pct = s.match(/^([0-9.]+)%$/);
+    if (pct) return Math.round((Number(pct[1]) / 100) * total);
+    const px = Number(s.replace(/[^0-9.-]/g, ""));
+    if (Number.isFinite(px) && px > 0) return px;
   }
   return fallback;
 }
 
 function estimateTextBox(text: string, fontSize: number) {
-  // Very rough estimate; the editor lets user resize anyway.
-  const chars = Math.max(1, text.length);
-  const width = clamp(Math.round(chars * (fontSize * 0.6)), 50, 700);
-  const height = clamp(Math.round(fontSize * 1.4), 20, 300);
+  const avgCharWidth = fontSize * 0.6;
+  const width = Math.min(2000, Math.max(10, Math.round(text.length * avgCharWidth)));
+  const height = Math.max(10, Math.round(fontSize * 1.2));
   return { width, height };
 }
 
-function legacyToTemplate(
-  legacy: LegacyCanvasElement,
-  canvasWidth: number,
-  canvasHeight: number,
-  zIndexBase: number,
-  out: TemplateElement[],
-  parentOffset: { x: number; y: number } = { x: 0, y: 0 },
-) {
-  const x = (legacy.x ?? 0) + parentOffset.x;
-  const y = (legacy.y ?? 0) + parentOffset.y;
+function normalizeGeometry(el: TemplateElement, canvasWidth: number, canvasHeight: number): TemplateElement {
+  const x = Math.max(0, Math.min(el.x ?? 0, canvasWidth));
+  const y = Math.max(0, Math.min(el.y ?? 0, canvasHeight));
+  const width = Math.max(1, Math.min(el.width ?? 1, canvasWidth));
+  const height = Math.max(1, Math.min(el.height ?? 1, canvasHeight));
+  return { ...el, x, y, width, height } as TemplateElement;
+}
 
-  // Containers -> background rect + layout children
+function coerceAiItem(item: any): any {
+  // Minimal coercion: convert snake_case keys to camelCase for puter outputs
+  if (!item || typeof item !== "object") return item;
+  const res: any = {};
+  Object.keys(item).forEach((k) => {
+    const v = (item as any)[k];
+    const camel = k.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    res[camel] = v;
+  });
+  return res;
+}
+
+  function legacyToTemplate(
+    legacy: any,
+    canvasWidth: number,
+    canvasHeight: number,
+    zIndexBase: number,
+    out: TemplateElement[],
+    parentOffset: { x: number; y: number } = { x: 0, y: 0 },
+  ) {
+    const x = (legacy.x ?? 0) + parentOffset.x;
+    const y = (legacy.y ?? 0) + parentOffset.y;
+
+    // Containers -> background rect + layout children
   if (legacy.type === "container") {
     const padding = legacy.padding ?? 0;
     const gap = legacy.gap ?? 0;
@@ -348,7 +234,7 @@ function legacyToTemplate(
     let cursorY = y + padding;
 
     // naive layout: sequential in row/column
-    children.forEach((child, idx) => {
+    children.forEach((child: any, idx: number) => {
       const childFont = child.fontSize ?? 24;
       const childText = child.text ?? "";
 
@@ -483,6 +369,58 @@ function legacyToTemplate(
   }
 }
 
+/**
+ * Parse a CSS linear-gradient(...) string into a lightweight GradientProps-like object.
+ */
+function parseCssLinearGradient(str: string | undefined) {
+  if (!str) return undefined;
+  const s = str.trim();
+  const lgMatch = s.match(/linear-gradient\((.*)\)/i);
+  if (!lgMatch) return undefined;
+
+  const inner = lgMatch[1].trim();
+
+  // Try to extract an angle or direction at the start
+  let rotation: number | undefined;
+  const angleMatch = inner.match(/^([0-9.]+)deg\s*,/i);
+  if (angleMatch) rotation = Number(angleMatch[1]);
+  else if (/to\s+right/i.test(inner)) rotation = 90;
+  else if (/to\s+left/i.test(inner)) rotation = 270;
+  else if (/to\s+bottom/i.test(inner)) rotation = 180;
+  else if (/to\s+top/i.test(inner)) rotation = 0;
+
+  // Extract color stops while being tolerant of commas inside rgba(...) by
+  // matching colors with optional percentage.
+  const stopRe = /(?:rgba?\([^\)]+\)|#[0-9a-fA-F]{3,8}|[a-zA-Z]+)\s*[0-9.]*%?/g;
+  const stopsRaw = Array.from(inner.matchAll(stopRe)).map((mm) => mm[0].trim());
+  const stops: { offset: number; color: string }[] = [];
+  if (stopsRaw.length) {
+    // If stops include explicit percentage, parse them; otherwise spread evenly.
+    const explicit = stopsRaw.map((s) => {
+      const pct = s.match(/\s([0-9.]+)%$/);
+      const color = s.replace(/\s+[0-9.]+%$/, "").trim();
+      return { color, pct: pct ? Number(pct[1]) / 100 : undefined };
+    });
+
+    if (explicit.some((e) => e.pct !== undefined)) {
+      explicit.forEach((e) => stops.push({ offset: e.pct ?? 0, color: e.color }));
+    } else {
+      const step = 1 / Math.max(1, stopsRaw.length - 1);
+      explicit.forEach((e, i) => stops.push({ offset: i * step, color: e.color }));
+    }
+  }
+
+  const gradient: any = {
+    enabled: true,
+    type: "linear",
+    stops,
+    start: { x: 0.5, y: 0 },
+    end: { x: 0.5, y: 1 },
+    rotation,
+  };
+  return gradient;
+}
+
 function isProbablyLegacyCanvasElement(x: any): x is LegacyCanvasElement {
   if (!x || typeof x !== "object") return false;
 
@@ -538,6 +476,7 @@ export function normalizeAiOutput(
   const arr = Array.isArray(maybeArray) ? maybeArray : [maybeArray];
 
   const out: TemplateElement[] = [];
+  const _rawOut: any[] = [];
 
   // 1) Convert any legacy elements
   arr.forEach((item, idx) => {
@@ -597,7 +536,7 @@ export function parseHtmlElementsFromText(
   if (!text || typeof text !== "string") return [];
 
   // Unwrap code fences like ```html ... ```
-  const unwrapped = text.replace(/```[a-zA-Z-]*\n?([\s\S]*?)```/g, "$1").trim();
+  let unwrapped = text.replace(/```[a-zA-Z-]*\n?([\s\S]*?)```/g, "$1").trim();
 
   const out: TemplateElement[] = [];
 
@@ -615,9 +554,279 @@ export function parseHtmlElementsFromText(
     return Number.isFinite(num) ? num : undefined;
   }
 
+  // parseCssLinearGradient is defined at module level and reused by JSON coercion
+
+  // Try AST-based parsing using rehype + svgson + postcss-value-parser
+  try {
+    // Be tolerant of different module shapes (CJS default vs ESM default export).
+    const rehypePlugin: any = (rehypeParse as any)?.default ?? rehypeParse;
+    const tree: any = unified().use(rehypePlugin, { fragment: true }).parse(unwrapped);
+
+    const styleToMap = (style: string | undefined) => {
+      const map: Record<string, string> = {};
+      if (!style) return map;
+      // If rehype gives us a style object (props.style may be an object), accept it.
+      if (typeof (style as any) === 'object') {
+        try {
+          Object.keys(style as any).forEach((k) => {
+            const v = (style as any)[k];
+            if (k && v !== undefined && v !== null) map[k.toLowerCase()] = String(v);
+          });
+          return map;
+        } catch (e) {
+          // fall through to string-based parsing
+        }
+      }
+      (style as string).split(';').map((s) => s.trim()).filter(Boolean).forEach((pair) => {
+        const [k, v] = pair.split(':').map((x: any) => x && x.trim());
+        if (k && v) map[k.toLowerCase()] = v;
+      });
+      return map;
+    };
+
+    const cssValueToPx2 = (val: string | undefined, axis: 'x' | 'y' | 'w' | 'h') => {
+      if (!val) return undefined;
+      const parsed = valueParser.unit(val);
+      if (parsed && parsed.number !== undefined) {
+        if (parsed.unit === '%') {
+          const n = parsed.number / 100;
+          return axis === 'w' || axis === 'x' ? Math.round(n * canvasWidth) : Math.round(n * canvasHeight);
+        }
+        return parsed.number;
+      }
+      const n = Number(val.replace(/[^0-9.-]/g, ''));
+      return Number.isFinite(n) ? n : undefined;
+    };
+
+    const collectText = (node: any) => {
+      if (!node) return '';
+      let acc = '';
+      if (node.type === 'text' && typeof node.value === 'string') acc += node.value;
+      if (Array.isArray(node.children)) node.children.forEach((c: any) => acc += collectText(c));
+      return acc;
+    };
+
+    const walkNode = (node: any) => {
+      if (!node) return;
+      if (Array.isArray(node.children)) node.children.forEach(walkNode);
+      if (node.type !== 'element') return;
+      const tag = (node.tagName || '').toLowerCase();
+      const props = node.properties || {};
+      const styleRaw = typeof props.style === 'string' ? props.style : props.style?.toString?.();
+      const styleMap = styleToMap(styleRaw);
+
+      if (tag === 'div') {
+        const left = cssValueToPx2(styleMap['left'], 'x') ?? 0;
+        const top = cssValueToPx2(styleMap['top'], 'y') ?? 0;
+        const width = cssValueToPx2(styleMap['width'], 'w') ?? 100;
+        const height = cssValueToPx2(styleMap['height'], 'h') ?? 100;
+        const bg = styleMap['background-color'] ?? styleMap['background'] ?? undefined;
+
+        const textContent = collectText(node).replace(/<[^>]+>/g, '').trim();
+        const hasElementChildren = Array.isArray(node.children) && node.children.some((c: any) => c.type === 'element');
+        // Only treat as a text element if the div is a leaf (no element children).
+        if (textContent.length > 0 && !hasElementChildren) {
+          const fontSize = cssValueToPx2(styleMap['font-size'], 'h') ?? 32;
+          const fontFamily = (styleMap['font-family'] ?? 'Inter').split(',')[0].trim();
+          const fontWeight = styleMap['font-weight'] ?? 'bold';
+          const color = styleMap['color'] ?? '#111827';
+          const textAlign = (styleMap['text-align'] as any) || 'center';
+
+          const txt: any = {
+            id: crypto.randomUUID(),
+            type: 'text',
+            name: 'Text',
+            x: left,
+            y: top,
+            width,
+            height,
+            zIndex: 0,
+            content: textContent,
+            fontSize,
+            fontFamily,
+            fontWeight,
+            color,
+            textAlign,
+            style: styleRaw,
+          };
+          out.push(txt as TemplateElement);
+          _rawOut.push(txt);
+          return;
+        }
+
+        const el: any = {
+          id: crypto.randomUUID(),
+          type: 'shape',
+          name: 'Box',
+          x: left,
+          y: top,
+          width,
+          height,
+          zIndex: 0,
+          shape: 'rectangle',
+          style: styleRaw,
+        };
+
+        if (bg) {
+          const grad = parseCssLinearGradient(bg);
+          if (grad) el.gradient = grad;
+          else el.color = bg;
+        }
+
+        if (styleMap['border-radius']) {
+          const br = cssValueToPx2(styleMap['border-radius'], 'h');
+          if (br !== undefined) el.borderRadius = br;
+          if (br !== undefined && Math.min(el.width, el.height) > 0 && br >= Math.min(el.width, el.height) / 2) el.shape = 'circle';
+        }
+
+        if (styleMap['transform']) {
+          const rot = (styleMap['transform'] as string).match(/rotate\(\s*([-0-9.]+)deg\s*\)/i);
+          if (rot) el.rotation = Number(rot[1]);
+        }
+
+        out.push(el as TemplateElement);
+        _rawOut.push(el);
+      }
+
+      if (tag === 'img') {
+        const styleMap = styleToMap(props.style as string);
+        const left = cssValueToPx2(styleMap['left'], 'x') ?? 0;
+        const top = cssValueToPx2(styleMap['top'], 'y') ?? 0;
+        const width = cssValueToPx2(styleMap['width'], 'w') ?? 100;
+        const height = cssValueToPx2(styleMap['height'], 'h') ?? 100;
+        const imgEl: any = {
+          id: crypto.randomUUID(),
+          type: 'image',
+          name: 'Image',
+          x: left,
+          y: top,
+          width,
+          height,
+          zIndex: 0,
+          src: props.src,
+        };
+        out.push(imgEl as TemplateElement);
+        _rawOut.push(imgEl);
+      }
+
+      if (tag === 'svg') {
+        const styleMap = styleToMap(props.style as any);
+        const left = cssValueToPx2(styleMap['left'], 'x') ?? 0;
+        const top = cssValueToPx2(styleMap['top'], 'y') ?? 0;
+        const width = cssValueToPx2(styleMap['width'], 'w') ?? 100;
+        const height = cssValueToPx2(styleMap['height'], 'h') ?? 100;
+
+        // Try to find first path/g child and read attributes directly from AST node
+        const children = node.children || [];
+        const pathNode = children.find((c: any) => c.type === 'element' && (c.tagName === 'path' || c.tagName === 'g' || c.tagName === 'circle' || c.tagName === 'rect')) as any;
+
+        let d = '';
+        let stroke: string | undefined = undefined;
+        let strokeWidth: number | undefined = undefined;
+        let fill: string | undefined = undefined;
+
+        if (pathNode) {
+          d = pathNode.properties?.d ?? '';
+          stroke = pathNode.properties?.stroke ?? pathNode.properties?.['stroke'];
+          const sw = pathNode.properties?.['stroke-width'] ?? pathNode.properties?.['strokeWidth'];
+          if (sw !== undefined) strokeWidth = Number(sw);
+          fill = pathNode.properties?.fill ?? undefined;
+        } else {
+          // Fallback: attempt to stringify inner children and use svgson
+          const svgHtml = (node.children || []).map((c: any) => c.value ?? '').join('');
+          try {
+            const parsedSvg = parseSvg('<svg ' + Object.keys(props).filter((k: any) => k !== 'style').map((k: any) => `${k}="${props[k]}"`).join(' ') + '>' + svgHtml + '</svg>');
+            const found = (parsedSvg.children || []).find((c: any) => c.name === 'path' || c.name === 'g');
+            d = found?.attributes?.d ?? '';
+            stroke = found?.attributes?.stroke ?? undefined;
+            strokeWidth = found?.attributes?.['stroke-width'] ? Number(found.attributes['stroke-width']) : undefined;
+            fill = found?.attributes?.fill;
+          } catch (e) {
+            // ignore
+          }
+        }
+
+        const svgEl: any = {
+          id: crypto.randomUUID(),
+          type: 'svg',
+          name: 'SVG',
+          x: left,
+          y: top,
+          width,
+          height,
+          zIndex: 0,
+          content: d,
+          fill,
+          stroke,
+          strokeWidth,
+          viewBox: props.viewBox ?? parsed?.attributes?.viewBox,
+        };
+        out.push(svgEl as TemplateElement);
+        _rawOut.push(svgEl);
+      }
+    };
+
+    walkNode(tree);
+    if (out.length > 0) return normalizeAiOutput(out, canvasWidth, canvasHeight);
+  } catch (err) {
+    // Fail quietly in normal operation; keep debug-level info for developers.
+    // eslint-disable-next-line no-console
+    console.debug && console.debug('parseHtmlElementsFromText AST parse failed, falling back to heuristic parser:', err?.message ?? err);
+  }
   // Simple <div> detection
-  const divRe = /<div\b([^>]*)>([\s\S]*?)<\/div>/gi;
+  // First, extract leaf <div> elements that directly contain text (no child tags)
+  const leafDivRe = /<div\b([^>]*)>\s*([^<]+?)\s*<\/div>/gi;
   let m: RegExpExecArray | null;
+  const leafMatches: RegExpExecArray[] = [];
+  while ((m = leafDivRe.exec(unwrapped))) {
+    leafMatches.push(m);
+  }
+  // Remove leaf matches from the working HTML so the generic div matcher doesn't capture them inside parents
+  for (const lm of leafMatches) {
+    const attrs = lm[1] || "";
+    const textContent = (lm[2] || "").replace(/\s+/g, ' ').trim();
+    const styleMatch = attrs.match(/style\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+    const style = (styleMatch && (styleMatch[1] || styleMatch[2])) || "";
+    const styleMap: Record<string, string> = {};
+    style.split(";").map((s) => s.trim()).filter(Boolean).forEach((pair) => {
+      const [k, v] = pair.split(":").map((x) => x && x.trim());
+      if (k && v) styleMap[k.toLowerCase()] = v;
+    });
+
+    const left = parseCssValue(styleMap["left"], "x") ?? 0;
+    const top = parseCssValue(styleMap["top"], "y") ?? 0;
+    const width = parseCssValue(styleMap["width"], "w") ?? 100;
+    const height = parseCssValue(styleMap["height"], "h") ?? 100;
+    const fontSize = parseCssValue(styleMap['font-size'], 'h') ?? 32;
+    const fontFamily = (styleMap['font-family'] || 'Inter').split(',')[0].trim();
+    const fontWeight = styleMap['font-weight'] || 'bold';
+    const color = styleMap['color'] || '#111827';
+
+    const txt: any = {
+      id: crypto.randomUUID(),
+      type: 'text',
+      name: 'Text',
+      x: left,
+      y: top,
+      width,
+      height,
+      zIndex: 0,
+      content: textContent,
+      fontSize,
+      fontFamily,
+      fontWeight,
+      color,
+      textAlign: (styleMap['text-align'] as any) || 'center',
+      style,
+    };
+    out.push(txt as TemplateElement);
+    _rawOut.push(txt);
+    // remove this substring to avoid double-capture
+    unwrapped = unwrapped.replace(lm[0], '');
+  }
+
+  const divRe = /<div\b([^>]*)>([\s\S]*?)<\/div>/gi;
+  m = null;
   while ((m = divRe.exec(unwrapped))) {
     const attrs = m[1] || "";
     // style attribute
@@ -644,15 +853,72 @@ export function parseHtmlElementsFromText(
       width,
       height,
       zIndex: 0,
+      shape: "rectangle",
     };
+    // If this div contains plain text, prefer a `text` element so font properties
+    // are preserved for the editor. Otherwise treat as a simple shape.
+    const innerHtml = (m[2] || '').replace(/\s+/g, ' ').trim();
+    const innerText = innerHtml.replace(/<[^>]+>/g, '').trim();
+    const hasChildTags = /<[^>]+>/.test(m[2] || '');
+    // Only emit a text element when the div is a leaf containing only text (no child tags).
+    if (innerText.length > 0 && !hasChildTags) {
+      const fontSize = parseCssValue(styleMap['font-size'], 'h') ?? 32;
+      const fontFamily = (styleMap['font-family'] || 'Inter').split(',')[0].trim();
+      const fontWeight = styleMap['font-weight'] || 'bold';
+      const color = styleMap['color'] || '#111827';
 
-    if (bg) el.color = bg;
+      const txt: any = {
+        id: crypto.randomUUID(),
+        type: 'text',
+        name: 'Text',
+        x: left,
+        y: top,
+        width,
+        height,
+        zIndex: 0,
+        content: innerText,
+        fontSize,
+        fontFamily,
+        fontWeight,
+        color,
+        textAlign: (styleMap['text-align'] as any) || 'center',
+        style: style,
+      };
+      out.push(txt as TemplateElement);
+      _rawOut.push(txt);
+      continue;
+    }
+    if (bg) {
+      // background may be a simple color or a linear-gradient()
+      const lg = parseCssLinearGradient(bg);
+      if (lg) {
+        el.gradient = lg;
+      } else {
+        el.color = bg;
+      }
+    }
+    if (style) {
+      el.style = style;
+    }
     if (styleMap["opacity"]) {
       const op = parseFloat(styleMap["opacity"] as string);
       if (!Number.isNaN(op)) el.opacity = op;
     }
+    if (styleMap['border-radius']) {
+      const br = parseCssValue(styleMap['border-radius'], 'h');
+      if (br !== undefined) el.borderRadius = br;
+      if (br !== undefined && Math.min(el.width, el.height) > 0 && br >= Math.min(el.width, el.height) / 2) el.shape = 'circle';
+    }
+    if (styleMap["transform"]) {
+      const t = styleMap["transform"] as string;
+      const rot = t.match(/rotate\s*\(\s*([-0-9.]+)deg\s*\)/i);
+      if (rot) el.rotation = Number(rot[1]);
+      // keep raw transform in style so non-supported transforms can round-trip
+      el.style = (el.style ? el.style + ";" : "") + `transform: ${t}`;
+    }
 
     out.push(el as TemplateElement);
+    _rawOut.push(el);
   }
 
   // <img src=...> detection
@@ -687,7 +953,57 @@ export function parseHtmlElementsFromText(
     };
 
     out.push(imgEl as TemplateElement);
+    _rawOut.push(imgEl);
   }
+
+  // <svg> detection - preserve content and viewBox where possible
+  const svgRe = /<svg\b([^>]*)>([\s\S]*?)<\/svg>/gi;
+  while ((m = svgRe.exec(unwrapped))) {
+    const attrs = m[1] || "";
+    const inner = m[2] || "";
+    const styleMatch = attrs.match(/style\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+    const style = (styleMatch && (styleMatch[1] || styleMatch[2])) || "";
+    const styleMap: Record<string, string> = {};
+    style.split(";").map((s) => s.trim()).filter(Boolean).forEach((pair) => {
+      const [k, v] = pair.split(":").map((x) => x && x.trim());
+      if (k && v) styleMap[k.toLowerCase()] = v;
+    });
+
+    // try to get bounding geometry from style attributes or width/height attrs
+    const left = parseCssValue(styleMap["left"], "x") ?? 0;
+    const top = parseCssValue(styleMap["top"], "y") ?? 0;
+    const width = parseCssValue(styleMap["width"], "w") ?? 100;
+    const height = parseCssValue(styleMap["height"], "h") ?? 100;
+
+    const viewBoxMatch = attrs.match(/viewBox\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+    const viewBox = viewBoxMatch ? (viewBoxMatch[1] || viewBoxMatch[2]) : undefined;
+
+    const svgEl: any = {
+      id: crypto.randomUUID(),
+      type: "svg",
+      name: "SVG",
+      x: left,
+      y: top,
+      width,
+      height,
+      zIndex: 0,
+      content: inner.trim(),
+    };
+    if (viewBox) svgEl.viewBox = viewBox;
+    if (style) svgEl.style = style;
+    // try to pull a top-level fill/stroke from inner paths
+    const fillMatch = inner.match(/fill\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+    if (fillMatch) svgEl.fill = fillMatch[1] || fillMatch[2];
+    const strokeMatch = inner.match(/stroke\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+    if (strokeMatch) svgEl.stroke = strokeMatch[1] || strokeMatch[2];
+    const strokeWidthMatch = inner.match(/stroke-width\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+    if (strokeWidthMatch) svgEl.strokeWidth = Number(strokeWidthMatch[1] || strokeWidthMatch[2]);
+
+    out.push(svgEl as TemplateElement);
+    _rawOut.push(svgEl);
+  }
+
+  // Raw output is intentionally not logged in production; use debug tools when needed.
 
   return normalizeAiOutput(out, canvasWidth, canvasHeight);
 }
@@ -705,15 +1021,23 @@ export function parseJsonElementsFromText(
   if (!text || typeof text !== "string") return [];
 
   const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
-  const start = cleaned.indexOf("{");
-  const arrStart = cleaned.indexOf("[");
-  const startIdx = start === -1 ? arrStart : start;
-  if (startIdx === -1) return [];
+  const firstObj = cleaned.indexOf("{");
+  const firstArr = cleaned.indexOf("[");
+  const lastObjEnd = cleaned.lastIndexOf("}");
+  const lastArrEnd = cleaned.lastIndexOf("]");
 
-  const end = cleaned.lastIndexOf("}");
-  const arrEnd = cleaned.lastIndexOf("]");
-  const endIdx = Math.max(end, arrEnd);
-  if (endIdx === -1 || endIdx < startIdx) return [];
+  // Choose a matching pair: prefer an array if its opening '[' appears before '{', otherwise prefer an object
+  let startIdx = -1;
+  let endIdx = -1;
+  if (firstArr !== -1 && (firstObj === -1 || firstArr < firstObj)) {
+    startIdx = firstArr;
+    endIdx = lastArrEnd;
+  } else if (firstObj !== -1) {
+    startIdx = firstObj;
+    endIdx = lastObjEnd;
+  }
+
+  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return [];
 
   const jsonText = cleaned.slice(startIdx, endIdx + 1);
 
@@ -726,7 +1050,18 @@ export function parseJsonElementsFromText(
     else nodes = [parsed];
 
     const coerced = nodes.map((n) => coercePuterElement(n));
-    return normalizeAiOutput(coerced, canvasWidth, canvasHeight);
+
+    // Map Puter-style geometry keys to our expected schema and coerce percentage widths/heights
+    const adjusted = coerced.map((it: any) => {
+      const copy = { ...it };
+      if (copy.left !== undefined && copy.x === undefined) copy.x = parseSize(copy.left, 0, canvasWidth);
+      if (copy.top !== undefined && copy.y === undefined) copy.y = parseSize(copy.top, 0, canvasHeight);
+      if (copy.width !== undefined) copy.width = parseSize(copy.width, 100, canvasWidth);
+      if (copy.height !== undefined) copy.height = parseSize(copy.height, 100, canvasHeight);
+      return copy;
+    });
+
+    return normalizeAiOutput(adjusted, canvasWidth, canvasHeight);
   } catch (err) {
     return [];
   }
@@ -753,6 +1088,16 @@ function coercePuterElement(raw: any): any {
     out.shape = out.shape || "rectangle";
     if (!out.color && out.fill) out.color = out.fill;
     if (!out.color && out.fill_color) out.color = out.fill_color;
+  }
+
+  // If provider used CSS-like backgrounds (e.g., linear-gradient(...)), coerce into gradient
+  if (typeof out.background === "string" && out.background.includes("linear-gradient")) {
+    const g = parseCssLinearGradient(out.background);
+    if (g) out.gradient = g;
+  }
+  if (typeof out.fill === "string" && out.fill.includes("linear-gradient")) {
+    const g = parseCssLinearGradient(out.fill);
+    if (g) out.gradient = g;
   }
 
   // Map legacy keys for text
