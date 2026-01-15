@@ -1340,10 +1340,10 @@ ${JSON.stringify(sanitizeElementsForPrompt(normalizeAiOutput(raw, canvasWidth, c
   throw lastError;
 }
 
-export async function testConnection(apiKey: string): Promise<boolean> {
+export async function testConnection(apiKey: string, modelName:string): Promise<boolean> {
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const model = genAI.getGenerativeModel({ model: modelName || "gemini-2.5-flash" });
     await model.generateContent("Test");
     return true;
   } catch (e) {

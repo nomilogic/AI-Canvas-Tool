@@ -71,7 +71,7 @@ const DEFAULT_CONFIG: AIConfig = {
   ollamaUrl: ENV_OLLAMA_URL,
 };
 
-export function getAIConfig(): AIConfig {
+export function getAIConfig(): AIConfig { 
   const stored = localStorage.getItem(LS_CONFIG_KEY);
 
   // Load non-secret config (provider, model selection, URLs)

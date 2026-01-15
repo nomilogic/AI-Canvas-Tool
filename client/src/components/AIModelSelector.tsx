@@ -585,7 +585,7 @@ export const AIModelSelector = () => {
                   }
                   if (config.provider === "gemini") {
                     const { testConnection } = await import("@/lib/gemini");
-                    const result = await testConnection(providerKeyInput);
+                    const result = await testConnection(providerKeyInput, config.geminiModel);
                     if (result) {
                       toast.success("✓ Gemini API connection successful!");
                     } else {
