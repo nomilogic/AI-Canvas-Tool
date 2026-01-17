@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { callPuterChat } from '../lib/puter-client';
 import callClaudeChat from '../lib/claude-client';
-import { getStoredProviderKey } from '../lib/ai-config';
+import { getAIConfig, getStoredProviderKey } from '../lib/ai-config';
 import { X, Paperclip, Trash2 } from 'lucide-react';
 
 interface Message {
@@ -48,11 +48,19 @@ const ClaudeChatBox: React.FC<ClaudeChatBoxProps> = ({ className, style, onClose
   }, [initialPrompt]);
 
   useEffect(() => {
-    // Sync persisted chat provider/model
-    const p = (localStorage.getItem('chat_provider') as any) || 'puter';
-    const m = (localStorage.getItem('chat_model') as string) || (localStorage.getItem('puter_model') || 'claude-sonnet-4-5');
-    setChatProvider(p);
-    setChatModel(m);
+    // Sync persisted chat provider/model from global AI config
+    const config = getAIConfig();
+    const currentProvider = config.provider as any;
+    setChatProvider(currentProvider);
+    
+    let model = '';
+    if (currentProvider === 'claude') model = localStorage.getItem('claude_model') || '';
+    else if (currentProvider === 'puter') model = localStorage.getItem('puter_model') || '';
+    else if (currentProvider === 'openai') model = localStorage.getItem('openai_model') || '';
+    else if (currentProvider === 'gemini') model = localStorage.getItem('gemini_model') || '';
+    else if (currentProvider === 'deepseek') model = localStorage.getItem('deepseek_model') || '';
+    
+    setChatModel(model || config.apiKey || '');
   }, []);
 
   // Handle dragging
@@ -140,7 +148,7 @@ const ClaudeChatBox: React.FC<ClaudeChatBoxProps> = ({ className, style, onClose
       let content = '';
 
       if (chatProvider === 'puter') {
-        const model = (typeof window !== 'undefined' && localStorage.getItem('puter_model')) || 'claude-sonnet-4-5';
+        const model = chatModel || localStorage.getItem('puter_model') || 'claude-sonnet-4-5';
         const response = await callPuterChat(promptToSend, { model, stream: false });
         if (response?.message?.content?.[0]?.text) {
           content = response.message.content[0].text;
@@ -151,12 +159,41 @@ const ClaudeChatBox: React.FC<ClaudeChatBoxProps> = ({ className, style, onClose
         }
       } else if (chatProvider === 'claude') {
         const apiKey = getStoredProviderKey('claude') || localStorage.getItem('claude_api_key') || '';
-        const model = chatModel || (localStorage.getItem('claude_model') as string) || 'claude-3-opus';
+        const model = chatModel || localStorage.getItem('claude_model') || 'claude-3-opus';
         const resp: any = await callClaudeChat(promptToSend, apiKey, { model });
         content = resp?.completion || resp?.output || resp?.completion?.text || String(resp || 'No response');
+      } else if (chatProvider === ('openai' as any)) {
+        const apiKey = getStoredProviderKey('openai') || '';
+        const model = chatModel || localStorage.getItem('openai_model') || 'gpt-4o-mini';
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            model, 
+            messages: [{ role: 'user', content: promptToSend }] 
+          }),
+        });
+        const data = await response.json();
+        content = data?.choices?.[0]?.message?.content ?? String(data);
+      } else if (chatProvider === ('gemini' as any)) {
+        const apiKey = getStoredProviderKey('gemini') || '';
+        const model = chatModel || localStorage.getItem('gemini_model') || 'gemini-pro';
+        const { generateLayout } = await import("../lib/gemini");
+        const res = await generateLayout(apiKey, promptToSend, [], 0, 0, "You are a helpful assistant.", { strategy: 'full' }, model);
+        content = typeof res === 'string' ? res : JSON.stringify(res);
+      } else if (chatProvider === ('deepseek' as any)) {
+        const model = chatModel || localStorage.getItem('deepseek_model') || 'deepseek-chat';
+        const messages = [{ role: 'user', content: promptToSend }];
+        const response = await fetch('/api/ai/deepseek', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, messages }),
+        });
+        const data = await response.json();
+        content = data?.content ?? String(data);
       } else {
         // Fallback: try Puter when other providers are selected for now
-        const model = (typeof window !== 'undefined' && localStorage.getItem('puter_model')) || 'claude-sonnet-4-5';
+        const model = chatModel || localStorage.getItem('puter_model') || 'claude-sonnet-4-5';
         const response = await callPuterChat(promptToSend, { model, stream: false });
         content = response?.message?.content?.[0]?.text ?? response?.result?.message?.content?.[0]?.text ?? String(response || 'No response');
       }
@@ -284,7 +321,9 @@ const ClaudeChatBox: React.FC<ClaudeChatBoxProps> = ({ className, style, onClose
           >
             <option value="puter">Puter</option>
             <option value="claude">Claude</option>
+            <option value="openai">OpenAI</option>
             <option value="gemini">Gemini</option>
+            <option value="deepseek">DeepSeek</option>
             <option value="ollama">Ollama</option>
             <option value="huggingface">HuggingFace</option>
             <option value="groq">Groq</option>
