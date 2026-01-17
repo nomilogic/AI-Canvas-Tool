@@ -194,11 +194,23 @@ export function elementsToHtml(
   // Build the root style. If we have an explicit background element, use its
   // visual properties (color/gradient/image) on the root so it behaves like
   // a true canvas background and is easy to edit.
-  const rootStyleParts: string[] = ["position:relative", `width:${Math.round(width)}px`, `height:${Math.round(height)}px`];
+  const rootStyleParts: string[] = ["position:relative", `width:${Math.round(width)}px`, `height:${Math.round(height)}px`, "overflow:hidden"];
   let rootDataAttr = '';
   if (bgEl) {
-    // Use gradient if present
-    if (bgEl.gradient && (bgEl.gradient as any).enabled) {
+    // If the background element has a custom style, try to preserve its background/clip properties
+    if (bgEl.style) {
+      const parts = bgEl.style.split(';');
+      for (const p of parts) {
+        const trimmed = p.trim();
+        if (trimmed.startsWith('background') || trimmed.startsWith('clip-path') || trimmed.startsWith('border-radius')) {
+          rootStyleParts.push(trimmed);
+        }
+      }
+    }
+
+    // Use gradient if present and not already overridden by background in style
+    const hasBackgroundInStyle = rootStyleParts.some(p => p.startsWith('background'));
+    if (!hasBackgroundInStyle && bgEl.gradient && (bgEl.gradient as any).enabled) {
       const g = bgEl.gradient as any;
       if (g.type === 'linear') {
         const stops = Array.isArray(g.stops) ? g.stops : [];
@@ -210,7 +222,7 @@ export function elementsToHtml(
         const parts = stops.map((st: any) => `${st.color} ${Math.round((st.offset ?? 0) * 100)}%`);
         rootStyleParts.push(`background:radial-gradient(circle, ${parts.join(', ')})`);
       }
-    } else if ((bgEl as any).color) {
+    } else if (!hasBackgroundInStyle && (bgEl as any).color) {
       rootStyleParts.push(`background:${(bgEl as any).color}`);
     }
 
