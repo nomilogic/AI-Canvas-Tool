@@ -244,7 +244,7 @@ const LayerItem: React.FC<LayerItemProps> = ({
                   <input
                     type="text"
                     value={el.name || ''}
-                    onChange={(e) => {/* update name */}}
+                    onChange={(e) => updateElement(el.id, { name: e.target.value })}
                     className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm"
                   />
                 </div>
@@ -439,8 +439,10 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     setHistoryStep((prevStep) => prevStep + 1);
     if (!options?.skipOnChange) {
       onChange(newElements);
-      const newHtml = elementsToHtml(newElements, canvasSize);
-      onHtmlLayoutChange?.(newHtml);
+      if (onHtmlLayoutChange) {
+        const newHtml = elementsToHtml(newElements, canvasSize);
+        onHtmlLayoutChange(newHtml);
+      }
     }
   };
 
