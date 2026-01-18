@@ -45,130 +45,36 @@ export function elementsToHtml(
   const children = sorted
     .filter((el) => !(bgEl && el.id === bgEl.id))
     .map((el) => {
-      const style: string[] = [];
-      style.push("position:absolute");
-      style.push(`left:${Math.round(el.x)}px`);
-      style.push(`top:${Math.round(el.y)}px`);
-      style.push(`width:${Math.round(el.width)}px`);
-      style.push(`height:${Math.round(el.height)}px`);
-      if ((el as any).rotation) {
-        style.push(`transform:rotate(${Math.round((el as any).rotation)}deg)`);
-      }
-      if (el.opacity !== undefined) {
-        style.push(`opacity:${el.opacity}`);
-      }
-
-      const commonAttrs = `data-el-id="${el.id}" style="${style.join(";")}"`;
+      const inlineStyle = (el as any).style || "";
+      
+      const commonAttrs = `data-el-id="${el.id}" style="${inlineStyle}"`;
 
       if (el.type === "shape") {
         const s = el as ShapeElement;
-        const shapeStyle: string[] = [];
-
-        // Background / Gradient / Fill
-        if (s.gradient && (s.gradient as any).enabled) {
-          const g = s.gradient as any;
-          if (g.type === 'linear') {
-            const stops = Array.isArray(g.stops) ? g.stops : [];
-            const parts = stops.map((st: any) => `${st.color} ${Math.round((st.offset ?? 0) * 100)}%`);
-            const angle = typeof g.rotation === 'number' ? `${g.rotation}deg` : '0deg';
-            shapeStyle.push(`background:linear-gradient(${angle}, ${parts.join(', ')})`);
-          } else if (g.type === 'radial') {
-            const stops = Array.isArray(g.stops) ? g.stops : [];
-            const parts = stops.map((st: any) => `${st.color} ${Math.round((st.offset ?? 0) * 100)}%`);
-            shapeStyle.push(`background:radial-gradient(circle, ${parts.join(', ')})`);
-          }
-        } else if ((s as any).color) {
-          shapeStyle.push(`background:${(s as any).color}`);
-        }
-
-        // Encode the logical shape type into CSS so non-rectangular shapes (triangle,
-        // diamond, etc.) are actually visible in the HTML renderer.
-        switch ((s as any).shape) {
-          case "circle":
-            shapeStyle.push("border-radius:9999px");
-            break;
-          case "triangle":
-            shapeStyle.push("clip-path:polygon(50% 0,100% 100%,0 100%)");
-            break;
-          case "diamond":
-            shapeStyle.push("clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)");
-            break;
-          case "pentagon":
-            shapeStyle.push("clip-path:polygon(50% 0,100% 38%,82% 100%,18% 100%,0 38%)");
-            break;
-          case "hexagon":
-            shapeStyle.push("clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%)");
-            break;
-          case "octagon":
-            shapeStyle.push(
-              "clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%)",
-            );
-            break;
-          case "rounded-rectangle":
-            shapeStyle.push("border-radius:16px");
-            break;
-        }
-
-        // Explicit borderRadius on the element overrides the canned defaults above.
-        if (typeof (s as any).borderRadius === "number") {
-          shapeStyle.push(`border-radius:${Math.round((s as any).borderRadius)}px`);
-        }
-
-        // Shadow
-        if ((s as any).shadow && (s as any).shadow.enabled) {
-          const sh = (s as any).shadow as any;
-          const hex = (sh.color || '#000000').replace('#', '');
-          const r = parseInt(hex.substring(0, 2), 16);
-          const g = parseInt(hex.substring(2, 4), 16);
-          const b = parseInt(hex.substring(4, 6), 16);
-          const o = typeof sh.opacity === 'number' ? sh.opacity : 1;
-          shapeStyle.push(`box-shadow:${Math.round(sh.offsetX)}px ${Math.round(sh.offsetY)}px ${Math.round(sh.blur)}px rgba(${r},${g},${b},${o})`);
-        }
-
-        const merged = style.concat(shapeStyle);
         const dataAttrs = [`data-el-id=\"${el.id}\"`, (s as any).shape ? `data-shape=\"${(s as any).shape}\"` : null]
           .filter(Boolean)
           .join(" ");
 
-        return `<div ${dataAttrs} style="${merged.join(";")}"></div>`;
+        return `<div ${dataAttrs} style="${inlineStyle}"></div>`;
       }
 
       if (el.type === "text") {
         const t = el as TextElement;
-        const textStyle: string[] = [...style];
-        textStyle.push(`color:${t.color}`);
-        textStyle.push(`font-size:${Math.round(t.fontSize)}px`);
-        // Use single quotes inside the style value to avoid breaking the surrounding
-        // double-quoted style attribute.
-        const fontFamily = (t.fontFamily || "Inter").replace(/'/g, "\\'");
-        textStyle.push(`font-family:'${fontFamily}'`);
-        const fontWeight = t.fontWeight || "bold";
-        textStyle.push(`font-weight:${fontWeight}`);
-        textStyle.push(`text-align:${t.textAlign}`);
-        textStyle.push("display:flex");
-        textStyle.push("align-items:center");
-        textStyle.push("justify-content:center");
-        return `<div data-el-id="${el.id}" style="${textStyle.join(";")}">${escapeHtml(
+        return `<div data-el-id="${el.id}" style="${inlineStyle}">${escapeHtml(
           t.content || "",
         )}</div>`;
       }
 
       if (el.type === "image") {
         const img = el as LogoElement;
-        const imgStyle: string[] = [...style];
-        imgStyle.push("object-fit:cover");
-        if (typeof (img as any).borderRadius === "number") {
-          imgStyle.push(`border-radius:${Math.round((img as any).borderRadius)}px`);
-        }
         const src = (img as any).src || "";
         return `<img data-el-id="${el.id}" alt="${escapeHtml(img.name || "Image")}" src="${escapeHtml(
           src,
-        )}" style="${imgStyle.join(";")}" />`;
+        )}" style="${inlineStyle}" />`;
       }
 
       if (el.type === "svg") {
         const svg = el as SvgElement;
-        const svgStyle: string[] = [...style];
         const fill = svg.fill ?? "#111827";
         const stroke = svg.stroke;
         const strokeWidth = svg.strokeWidth;
@@ -181,7 +87,7 @@ export function elementsToHtml(
         const viewBox = svg.viewBox && svg.viewBox.trim().length > 0 ? svg.viewBox : "0 0 100 100";
         const w = Math.max(1, Math.round(el.width));
         const h = Math.max(1, Math.round(el.height));
-        return `<svg data-el-id="${el.id}" viewBox="${viewBox}" width="${w}" height="${h}" style="${svgStyle.join(";")}">
+        return `<svg data-el-id="${el.id}" viewBox="${viewBox}" width="${w}" height="${h}" style="${inlineStyle}">
   <path d="${d}" fill="${fill}"${strokeAttrs}></path>
 </svg>`;
       }
@@ -197,45 +103,9 @@ export function elementsToHtml(
   const rootStyleParts: string[] = ["position:relative", `width:${Math.round(width)}px`, `height:${Math.round(height)}px`, "overflow:hidden"];
   let rootDataAttr = '';
   if (bgEl) {
-    // If the background element has a custom style, try to preserve its background/clip properties
     if (bgEl.style) {
-      const parts = bgEl.style.split(';');
-      for (const p of parts) {
-        const trimmed = p.trim();
-        if (trimmed.startsWith('background') || trimmed.startsWith('clip-path') || trimmed.startsWith('border-radius')) {
-          rootStyleParts.push(trimmed);
-        }
-      }
+      rootStyleParts.push(bgEl.style);
     }
-
-    // Use gradient if present and not already overridden by background in style
-    const hasBackgroundInStyle = rootStyleParts.some(p => p.startsWith('background'));
-    if (!hasBackgroundInStyle && bgEl.gradient && (bgEl.gradient as any).enabled) {
-      const g = bgEl.gradient as any;
-      if (g.type === 'linear') {
-        const stops = Array.isArray(g.stops) ? g.stops : [];
-        const parts = stops.map((st: any) => `${st.color} ${Math.round((st.offset ?? 0) * 100)}%`);
-        const angle = typeof g.rotation === 'number' ? `${g.rotation}deg` : '0deg';
-        rootStyleParts.push(`background:linear-gradient(${angle}, ${parts.join(', ')})`);
-      } else if (g.type === 'radial') {
-        const stops = Array.isArray(g.stops) ? g.stops : [];
-        const parts = stops.map((st: any) => `${st.color} ${Math.round((st.offset ?? 0) * 100)}%`);
-        rootStyleParts.push(`background:radial-gradient(circle, ${parts.join(', ')})`);
-      }
-    } else if (!hasBackgroundInStyle && (bgEl as any).color) {
-      rootStyleParts.push(`background:${(bgEl as any).color}`);
-    }
-
-    if ((bgEl as any).shadow && (bgEl as any).shadow.enabled) {
-      const sh = (bgEl as any).shadow as any;
-      const hex = (sh.color || '#000000').replace('#', '');
-      const r = parseInt(hex.substring(0, 2), 16);
-      const g = parseInt(hex.substring(2, 4), 16);
-      const b = parseInt(hex.substring(4, 6), 16);
-      const o = typeof sh.opacity === 'number' ? sh.opacity : 1;
-      rootStyleParts.push(`box-shadow:${Math.round(sh.offsetX)}px ${Math.round(sh.offsetY)}px ${Math.round(sh.blur)}px rgba(${r},${g},${b},${o})`);
-    }
-
     // Expose the background element id on the root so raw CSS edits can target it.
     rootDataAttr = ` data-el-id=\"${bgEl.id}\"`;
   } else {

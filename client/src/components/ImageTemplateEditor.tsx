@@ -426,93 +426,15 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
 
   // Add History
   const addToHistory = (newElements: TemplateElement[], options?: { skipOnChange?: boolean }) => {
-    // Helper: compute a reasonable inline style string from element props so
-    // the Layers panel's inline-style textarea stays in sync with visual
-    // properties (color, gradient, shadow, borderRadius, font, etc.). We
-    // only set the style when the element has no explicit user-provided
-    // inline style to avoid overwriting manual edits.
-    const computeInline = (el: TemplateElement) => {
-      try {
-        if (el.type === 'shape') {
-          const s: any = el as any;
-          const parts: string[] = [
-            'position:absolute',
-            `left:${Math.round(el.x)}px`,
-            `top:${Math.round(el.y)}px`,
-            `width:${Math.round(el.width)}px`,
-            `height:${Math.round(el.height)}px`,
-          ];
-          if (s.gradient && s.gradient.enabled) {
-            const g = s.gradient as any;
-            if (g.type === 'linear') {
-              const stops = Array.isArray(g.stops) ? g.stops : [];
-              const p = stops.map((st: any) => `${st.color} ${Math.round((st.offset ?? 0) * 100)}%`);
-              const angle = typeof g.rotation === 'number' ? `${g.rotation}deg` : '0deg';
-              parts.push(`background:linear-gradient(${angle}, ${p.join(', ')})`);
-            } else {
-              const stops = Array.isArray(g.stops) ? g.stops : [];
-              const p = stops.map((st: any) => `${st.color} ${Math.round((st.offset ?? 0) * 100)}%`);
-              parts.push(`background:radial-gradient(circle, ${p.join(', ')})`);
-            }
-          } else if ((s as any).color) {
-            parts.push(`background:${(s as any).color}`);
-          }
-          if (typeof (s as any).borderRadius === 'number') parts.push(`border-radius:${Math.round((s as any).borderRadius)}px`);
-          if ((s as any).shadow && (s as any).shadow.enabled) {
-            const sh = (s as any).shadow as any;
-            const hex = (sh.color || '#000000').replace('#', '');
-            const r = parseInt(hex.substring(0, 2), 16);
-            const g = parseInt(hex.substring(2, 4), 16);
-            const b = parseInt(hex.substring(4, 6), 16);
-            const o = typeof sh.opacity === 'number' ? sh.opacity : 1;
-            parts.push(`box-shadow:${Math.round(sh.offsetX)}px ${Math.round(sh.offsetY)}px ${Math.round(sh.blur)}px rgba(${r},${g},${b},${o})`);
-          }
-          return parts.join(';');
-        }
-
-        if (el.type === 'text') {
-          const t: any = el as any;
-          const parts: string[] = [
-            'position:absolute',
-            `left:${Math.round(el.x)}px`,
-            `top:${Math.round(el.y)}px`,
-            `width:${Math.round(el.width)}px`,
-            `height:${Math.round(el.height)}px`,
-            `color:${t.color}`,
-            `font-size:${Math.round(t.fontSize)}px`,
-            `font-family:'${(t.fontFamily || 'Inter').replace(/'/g, "\\'")}'`,
-            `font-weight:${t.fontWeight || '400'}`,
-            `text-align:${t.textAlign || 'center'}`,
-            'display:flex',
-            'align-items:center',
-            'justify-content:center',
-          ];
-          return parts.join(';');
-        }
-      } catch (e) {
-        // Best-effort only
-      }
-      return (el as any).style || '';
-    };
-
-    const synced = newElements.map((el) => {
-      const computed = computeInline(el);
-      if (!el.style || el.style.trim().length === 0 || el.style === computed) {
-        return { ...el, style: computed } as TemplateElement;
-      }
-      return el;
-    });
-
     setHistory((prev) => {
       const nextHistory = prev.slice(0, historyStep + 1);
-      nextHistory.push(synced);
+      nextHistory.push(newElements);
       return nextHistory;
     });
     setHistoryStep((prevStep) => prevStep + 1);
     if (!options?.skipOnChange) {
-      onChange(synced); // Propagate change when we intentionally want to rebuild from elements
-      // Also update the HTML layout for z-index changes
-      const newHtml = elementsToHtml(synced, canvasSize);
+      onChange(newElements);
+      const newHtml = elementsToHtml(newElements, canvasSize);
       onHtmlLayoutChange?.(newHtml);
     }
   };
@@ -2082,6 +2004,16 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                       <AccordionContent className="bg-[#252526] p-4 border-t border-[#3e3e42]">
                       {/* Nested Properties for this specific layer */}
                       
+                      <div className="mb-4">
+                        <h4 className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-2">Layer Name</h4>
+                        <input
+                          type="text"
+                          value={el.name || ''}
+                          onChange={(e) => updateElement(el.id, { name: e.target.value })}
+                          className="w-full bg-[#3e3e42] rounded px-2 py-1 text-sm mb-2"
+                        />
+                      </div>
+
                       {/* Layout */}
                       <div className="mb-4">
                         <h4 className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-2">Layout</h4>
@@ -2266,6 +2198,8 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                           const alignItems = getCss('align-items');
                           const flexDirection = getCss('flex-direction');
 
+                          const transformCss = getCss('transform') || '';
+
                           const parsePx = (value: string): string => {
                             const n = parseFloat(value);
                             return Number.isFinite(n) ? String(n) : '';
@@ -2276,6 +2210,17 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                               {/* CSS Visualizer controls */}
                               <div className="mb-3 mt-1 pt-2 border-t border-[#3e3e42] space-y-2">
                                 <div className="text-[10px] uppercase tracking-wider text-gray-500 font-bold">CSS Visualizer</div>
+                                
+                                <div className="mb-2">
+                                  <span className="text-xs text-gray-500 block mb-1">Transform</span>
+                                  <input
+                                    type="text"
+                                    value={transformCss}
+                                    onChange={(e) => applyCssPatch({ transform: e.target.value || null })}
+                                    placeholder="e.g. rotate(45deg) scale(1.2)"
+                                    className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs font-mono"
+                                  />
+                                </div>
 
                                 <div className="grid grid-cols-2 gap-2">
                                   <div>
