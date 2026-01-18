@@ -48,14 +48,14 @@
   "gemini": {
     "api_base": "https://generativelanguage.googleapis.com/v1beta",
     "models": [
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-flash", 
-    "gemini-2.5-flash-preview-09-2025",
-    "gemini-3-flash",
-    "gemini-3-pro",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash-image"
-
+      "gemini-3-flash-preview",
+      "gemini-2.5-flash-lite",
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-preview-09-2025",
+      "gemini-3-flash",
+      "gemini-3-pro",
+      "gemini-2.5-pro",
+      "gemini-2.5-flash-image"
     ]
   },
   "deepseek": {
@@ -82,9 +82,7 @@
   },
   "groq": {
     "api_base": "https://api.groq.com",
-    "models": [
-      "mixtral-8x7b-32768"
-    ]
+    "models": ["mixtral-8x7b-32768"]
   },
   "cohere": {
     "api_base": "https://api.cohere.com/v1",
@@ -99,11 +97,7 @@
   },
   "mistral": {
     "api_base": "https://api.mistral.ai/v1",
-    "models": [
-      "mistral-large",
-      "mixtral-8x7b",
-      "mixtral-8x22b"
-    ]
+    "models": ["mistral-large", "mixtral-8x7b", "mixtral-8x22b"]
   },
   "stability": {
     "api_base": "https://api.stability.ai",
