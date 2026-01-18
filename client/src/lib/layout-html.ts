@@ -532,6 +532,11 @@ function parseAbsoluteHtmlToTemplateElements(
         const opacity = style.opacity ? parseFloat(style.opacity) : undefined;
         const tag = (anyEl.tagName as string).toLowerCase();
 
+        // Capture shadow and gradient from computed style if not in inline style
+        const boxShadow = style.boxShadow || "";
+        const background = style.background || "";
+        const clipPath = style.clipPath || "";
+
         const existingId = anyEl.getAttribute?.("data-el-id") as string | null;
         const id = existingId && existingId.trim().length > 0 ? existingId : crypto.randomUUID();
 
@@ -606,7 +611,7 @@ function parseAbsoluteHtmlToTemplateElements(
               height,
               rotation,
               zIndex: zIndexCounter++,
-              style: rawStyleAttr,
+              style: rawStyleAttr || `background:${background};box-shadow:${boxShadow};clip-path:${clipPath}`,
               opacity,
               // @ts-expect-error - text specific props
               content: textContent,
@@ -617,7 +622,7 @@ function parseAbsoluteHtmlToTemplateElements(
               textAlign,
             } as any;
             result.push(textEl);
-          } else if (backgroundColor) {
+          } else if (backgroundColor || background || boxShadow) {
             // Preserve the original logical shape if it was encoded, otherwise infer from borderRadius.
             const inferredShape =
               borderRadius && borderRadius > Math.min(width, height) / 3 ? "circle" : "rectangle";
@@ -633,7 +638,7 @@ function parseAbsoluteHtmlToTemplateElements(
               height,
               rotation,
               zIndex: zIndexCounter++,
-              style: rawStyleAttr,
+              style: rawStyleAttr || `background:${background};box-shadow:${boxShadow};clip-path:${clipPath}`,
               opacity,
               // @ts-expect-error - shape specific props
               shape: shapeKind,
