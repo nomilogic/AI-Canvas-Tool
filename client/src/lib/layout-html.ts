@@ -114,6 +114,115 @@ export function elementsToHtml(
 
   const rootStyle = rootStyleParts.join(";");
 
+  // Only return the children if we are just generating the inner part
+  return `<div${rootDataAttr} style="${rootStyle}">${children}</div>`;
+}
+
+/**
+ * Serialize the current TemplateElement list into a simple absolute-positioned HTML snippet.
+ * This is used as a bridge while we migrate to HTML as the primary layout format.
+ */
+export function elementsToHtml(
+  elements: TemplateElement[],
+  canvasSize: { width: number; height: number },
+): string {
+  const { width, height } = canvasSize;
+
+  const sorted = [...elements].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0));
+
+  const escapeHtml = (s: string) =>
+    s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+
+  // If there is a full-canvas shape element (the relative root div from AI),
+  // prefer to use it as the background for the root container so editing it
+  // updates the canvas directly. We also attach its data-el-id to the root
+  // so in-place raw CSS edits can target the root element.
+  const bgEl = sorted.find(
+    (e) =>
+      e.type === "shape" &&
+      e.x <= 0 &&
+      e.y <= 0 &&
+      e.width >= width &&
+      e.height >= height,
+  ) as any | undefined;
+
+  const children = sorted
+    .filter((el) => !(bgEl && el.id === bgEl.id))
+    .map((el) => {
+      const inlineStyle = (el as any).style || "";
+      
+      const commonAttrs = `data-el-id="${el.id}" style="${inlineStyle}"`;
+
+      if (el.type === "shape") {
+        const s = el as ShapeElement;
+        const dataAttrs = [`data-el-id=\"${el.id}\"`, (s as any).shape ? `data-shape=\"${(s as any).shape}\"` : null]
+          .filter(Boolean)
+          .join(" ");
+
+        return `<div ${dataAttrs} style="${inlineStyle}"></div>`;
+      }
+
+      if (el.type === "text") {
+        const t = el as TextElement;
+        return `<div data-el-id="${el.id}" style="${inlineStyle}">${escapeHtml(
+          t.content || "",
+        )}</div>`;
+      }
+
+      if (el.type === "image") {
+        const img = el as LogoElement;
+        const src = (img as any).src || "";
+        return `<img data-el-id="${el.id}" alt="${escapeHtml(img.name || "Image")}" src="${escapeHtml(
+          src,
+        )}" style="${inlineStyle}" />`;
+      }
+
+      if (el.type === "svg") {
+        const svg = el as SvgElement;
+        const fill = svg.fill ?? "#111827";
+        const stroke = svg.stroke;
+        const strokeWidth = svg.strokeWidth;
+        const strokeAttrs = stroke
+          ? ` stroke="${stroke}"${
+              strokeWidth !== undefined ? ` stroke-width="${strokeWidth}"` : ""
+            }`
+          : "";
+        const d = svg.content || "";
+        const viewBox = svg.viewBox && svg.viewBox.trim().length > 0 ? svg.viewBox : "0 0 100 100";
+        const w = Math.max(1, Math.round(el.width));
+        const h = Math.max(1, Math.round(el.height));
+        return `<svg data-el-id="${el.id}" viewBox="${viewBox}" width="${w}" height="${h}" style="${inlineStyle}">
+  <path d="${d}" fill="${fill}"${strokeAttrs}></path>
+</svg>`;
+      }
+
+      // Fallback: non-supported types become empty divs with their box preserved.
+      return `<div ${commonAttrs}></div>`;
+    })
+    .join("\n");
+
+  // Build the root style. If we have an explicit background element, use its
+  // visual properties (color/gradient/image) on the root so it behaves like
+  // a true canvas background and is easy to edit.
+  const rootStyleParts: string[] = ["position:relative", `width:${Math.round(width)}px`, `height:${Math.round(height)}px`, "overflow:hidden"];
+  let rootDataAttr = '';
+  if (bgEl) {
+    if (bgEl.style) {
+      rootStyleParts.push(bgEl.style);
+    }
+    // Expose the background element id on the root so raw CSS edits can target it.
+    rootDataAttr = ` data-el-id=\"${bgEl.id}\"`;
+  } else {
+    rootStyleParts.push("background:#ffffff");
+  }
+
+  const rootStyle = rootStyleParts.join(";");
+
   return `<div${rootDataAttr} style="${rootStyle}">
 ${children}
 </div>`;

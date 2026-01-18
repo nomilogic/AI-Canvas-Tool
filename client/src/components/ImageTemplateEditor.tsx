@@ -412,13 +412,18 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   const selectSingle = (id: string) => {
     setSelectedIds([id]);
     setActiveTool('select');
+    setOpenLayerIds([id]); // Open the accordion when clicked
   };
 
   const toggleSelected = (id: string, next?: boolean) => {
     setSelectedIds((prev) => {
       const has = prev.includes(id);
       const shouldSelect = next ?? !has;
-      if (shouldSelect) return has ? prev : [...prev, id];
+      if (shouldSelect) {
+        if (!has) setOpenLayerIds(prevOpen => [...prevOpen, id]);
+        return has ? prev : [...prev, id];
+      }
+      setOpenLayerIds(prevOpen => prevOpen.filter(x => x !== id));
       return prev.filter((x) => x !== id);
     });
     setActiveTool('select');
@@ -914,7 +919,14 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       }
       return el;
     });
-    addToHistory(newElements);
+    
+    // If we're updating styling, also update the HTML layout
+    if ('style' in attrs && htmlLayout && onHtmlLayoutChange) {
+      const nextHtml = updateHtmlRawStyle(htmlLayout, id, (attrs as any).style);
+      onHtmlLayoutChange(nextHtml);
+    }
+    
+    addToHistory(newElements, { skipOnChange: true });
   };
 
   // Delete Element
