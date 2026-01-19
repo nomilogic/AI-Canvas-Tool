@@ -913,8 +913,7 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     }
   };
 
-  // Update Attributes
-  const updateElement = (id: string, attrs: Partial<TemplateElement> | Partial<TextElement> | Partial<ShapeElement> | Partial<SvgElement> | Partial<LogoElement>) => {
+  const updateElement = (id: string, attrs: Partial<TemplateElement>) => {
     const newElements = elements.map(el => {
       if (el.id === id) {
         return { ...el, ...attrs } as any;
@@ -922,13 +921,22 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       return el;
     });
     
+    // Notify parent about the change
+    onChange(newElements);
+    
     // If we're updating styling, also update the HTML layout
-    if ('style' in attrs && htmlLayout && onHtmlLayoutChange) {
+    if ('style' in (attrs as any) && htmlLayout && onHtmlLayoutChange) {
       const nextHtml = updateHtmlRawStyle(htmlLayout, id, (attrs as any).style);
       onHtmlLayoutChange(nextHtml);
     }
     
-    addToHistory(newElements, { skipOnChange: true });
+    // Update history
+    setHistory((prev) => {
+      const nextHistory = prev.slice(0, historyStep + 1);
+      nextHistory.push(newElements);
+      return nextHistory;
+    });
+    setHistoryStep((prevStep) => prevStep + 1);
   };
 
   // Delete Element

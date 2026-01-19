@@ -149,13 +149,31 @@ const ClaudeChatBox: React.FC<ClaudeChatBoxProps> = ({ className, style, onClose
 
       if (chatProvider === 'puter') {
         const model = chatModel || localStorage.getItem('puter_model') || 'claude-sonnet-4-5';
-        const response = await callPuterChat(promptToSend, { model, stream: false });
-        if (response?.message?.content?.[0]?.text) {
-          content = response.message.content[0].text;
-        } else if (response?.result?.message?.content?.[0]?.text) {
-          content = response.result.message.content[0].text;
-        } else {
-          content = String(response || 'No response received');
+        
+        // Add a placeholder message for streaming
+        const assistantMessageId = Date.now();
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: '',
+          timestamp: new Date(),
+          id: assistantMessageId
+        } as any]);
+
+        const response = await callPuterChat(promptToSend, { 
+          model, 
+          stream: true 
+        });
+
+        for await (const part of response) {
+          const text = part?.text || part?.message?.content?.[0]?.text || '';
+          if (text) {
+            content += text;
+            setMessages(prev => prev.map(msg => 
+              (msg as any).id === assistantMessageId 
+                ? { ...msg, content } 
+                : msg
+            ));
+          }
         }
       } else if (chatProvider === 'claude') {
         const apiKey = getStoredProviderKey('claude') || localStorage.getItem('claude_api_key') || '';
