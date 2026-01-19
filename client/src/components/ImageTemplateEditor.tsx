@@ -916,7 +916,32 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   const updateElement = (id: string, attrs: Partial<TemplateElement>) => {
     const newElements = elements.map(el => {
       if (el.id === id) {
-        return { ...el, ...attrs } as any;
+        // Merge the new attributes into the element
+        const updated = { ...el, ...attrs } as any;
+        
+        // If we are updating specific logical properties, we need to regenerate 
+        // the 'style' string so the CSS Visualizer and HTML layout stay in sync.
+        if (updated.type === 'shape' || updated.type === 'text') {
+           let newStyle = updated.style || "";
+           
+           // Apply color/background updates to the style string
+           if (attrs.color) {
+             if (updated.type === 'text') {
+               newStyle = newStyle.replace(/color:[^;]+;?/g, '') + `color:${attrs.color};`;
+             } else {
+               newStyle = newStyle.replace(/background:[^;]+;?/g, '') + `background:${attrs.color};`;
+             }
+           }
+           
+           // Apply opacity updates
+           if (attrs.opacity !== undefined) {
+             newStyle = newStyle.replace(/opacity:[^;]+;?/g, '') + `opacity:${attrs.opacity};`;
+           }
+           
+           updated.style = newStyle;
+        }
+        
+        return updated;
       }
       return el;
     });
@@ -924,10 +949,13 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
     // Notify parent about the change
     onChange(newElements);
     
-    // If we're updating styling, also update the HTML layout
-    if ('style' in (attrs as any) && htmlLayout && onHtmlLayoutChange) {
-      const nextHtml = updateHtmlRawStyle(htmlLayout, id, (attrs as any).style);
-      onHtmlLayoutChange(nextHtml);
+    // Always sync the HTML layout if any style-affecting attribute changed
+    if (htmlLayout && onHtmlLayoutChange) {
+      const el = newElements.find(e => e.id === id);
+      if (el) {
+        const nextHtml = updateHtmlRawStyle(htmlLayout, id, (el as any).style || "");
+        onHtmlLayoutChange(nextHtml);
+      }
     }
     
     // Update history
