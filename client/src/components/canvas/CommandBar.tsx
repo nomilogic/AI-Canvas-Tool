@@ -1,5 +1,59 @@
-import React, { useState } from 'react';
-import { Send, Sparkles, Command } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { Send, Sparkles } from 'lucide-react';
+
+// Type declarations for Web Speech API
+declare global {
+  interface Window {
+    SpeechRecognition: typeof SpeechRecognition;
+    webkitSpeechRecognition: typeof SpeechRecognition;
+  }
+}
+
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start(): void;
+  stop(): void;
+  abort(): void;
+  onstart: ((this: SpeechRecognition, ev: Event) => any) | null;
+  onend: ((this: SpeechRecognition, ev: Event) => any) | null;
+  onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => any) | null;
+  onerror: ((this: SpeechRecognition, ev: SpeechRecognitionErrorEvent) => any) | null;
+}
+
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+  resultIndex: number;
+}
+
+interface SpeechRecognitionErrorEvent extends Event {
+  error: string;
+  message: string;
+}
+
+interface SpeechRecognitionResultList {
+  readonly length: number;
+  item(index: number): SpeechRecognitionResult;
+  [index: number]: SpeechRecognitionResult;
+}
+
+interface SpeechRecognitionResult {
+  readonly length: number;
+  item(index: number): SpeechRecognitionAlternative;
+  [index: number]: SpeechRecognitionAlternative;
+  isFinal: boolean;
+}
+
+interface SpeechRecognitionAlternative {
+  transcript: string;
+  confidence: number;
+}
+
+declare var SpeechRecognition: {
+  prototype: SpeechRecognition;
+  new(): SpeechRecognition;
+};
 
 interface CommandBarProps {
   onSubmit: (prompt: string, attachedFile?: { dataUrl: string; name: string; type: string } | null) => void;
@@ -9,7 +63,9 @@ interface CommandBarProps {
 export const CommandBar: React.FC<CommandBarProps> = ({ onSubmit, isLoading }) => {
   const [prompt, setPrompt] = useState('');
   const [attachedFile, setAttachedFile] = useState<{ dataUrl: string; name: string; type: string } | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   const handleAttachClick = () => fileInputRef.current?.click();
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -46,10 +102,58 @@ export const CommandBar: React.FC<CommandBarProps> = ({ onSubmit, isLoading }) =
     }
   };
 
+  const startRecording = () => {
+    if (!('SpeechRecognition' in window) && !('webkitSpeechRecognition' in window)) {
+      alert('Speech recognition is not supported in this browser.');
+      return;
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+
+    recognition.onstart = () => {
+      setIsRecording(true);
+    };
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      const transcript = event.results[0][0].transcript;
+      setPrompt(transcript);
+    };
+
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      console.error('Speech recognition error:', event.error);
+      setIsRecording(false);
+    };
+
+    recognition.onend = () => {
+      setIsRecording(false);
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+  };
+
+  const stopRecording = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+  };
+
+  const handleMicClick = () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  };
+
   return (
     <div className="absolute bottom-3 left-1/2 -translate-x-1/2 w-full max-w-2xl px-4 z-50">
       <form onSubmit={handleSubmit} className="relative group">
-        <div className="absolute -inset-0.5 bg-gradient-to-r from-pink-500 to-violet-600 rounded-xl blur opacity-30 group-hover:opacity-75 transition duration-500"></div>
+        <div className="absolute -inset-0.5 bg-linear-to-r from-pink-500 to-violet-600 rounded-xl blur opacity-30 group-hover:opacity-75 transition duration-500"></div>
         <div className="relative flex items-center bg-[#1a1a1a]/90 backdrop-blur-xl border border-white/10 rounded-xl p-2 shadow-2xl">
           <div className="p-3 text-violet-400">
             {isLoading ? (
@@ -75,6 +179,32 @@ export const CommandBar: React.FC<CommandBarProps> = ({ onSubmit, isLoading }) =
             className="p-3 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><path d="M21.44 11.05l-9.19 9.19a5.5 5.5 0 0 1-7.78-7.78l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.19 9.19a1.5 1.5 0 0 1-2.12-2.12l7.07-7.07"/></svg>
+          </button>
+          <button
+            type="button"
+            onClick={handleMicClick}
+            title={isRecording ? "Stop recording" : "Start voice command"}
+            className={`p-3 rounded-lg transition-colors ${
+              isRecording
+                ? 'bg-red-500/20 hover:bg-red-500/30 text-red-400 animate-pulse'
+                : 'bg-white/10 hover:bg-white/20 text-white'
+            }`}
+          >
+            {isRecording ? (
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
+                <line x1="12" x2="12" y1="19" y2="22"/>
+                <line x1="8" x2="16" y1="22" y2="22"/>
+              </svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
+                <line x1="12" x2="12" y1="19" y2="22"/>
+                <line x1="8" x2="16" y1="22" y2="22"/>
+              </svg>
+            )}
           </button>
 
           {attachedFile && (

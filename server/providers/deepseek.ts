@@ -1,5 +1,3 @@
-import fetch from 'node-fetch';
-
 export interface DeepSeekRequest {
   model?: string;
   messages: Array<{ role: string; content: string }>;
