@@ -914,42 +914,60 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   };
 
   const updateElement = (id: string, attrs: Partial<TemplateElement>) => {
+    // Helper to merge a set of properties into a CSS style string
+    const mergeStyles = (baseStyle: string, newProps: Record<string, string | number | undefined>) => {
+      const div = document.createElement('div');
+      div.setAttribute('style', baseStyle);
+      const style = div.style;
+      
+      Object.entries(newProps).forEach(([prop, value]) => {
+        if (value === undefined) return;
+        // Use standard CSS property names
+        const cssProp = prop.replace(/[A-Z]/g, m => `-${m.toLowerCase()}`);
+        if (prop === 'x') style.left = `${Math.round(value as number)}px`;
+        else if (prop === 'y') style.top = `${Math.round(value as number)}px`;
+        else if (prop === 'width' || prop === 'height') style[prop] = `${Math.round(value as number)}px`;
+        else if (prop === 'color' && (attrs as any).type !== 'text') style.background = String(value);
+        else style[cssProp as any] = String(value);
+      });
+      
+      return div.getAttribute('style') || "";
+    };
+
     const newElements = elements.map(el => {
       if (el.id === id) {
-        // Merge the new attributes into the element
         const updated = { ...el, ...attrs } as any;
         
-        // If we are updating specific logical properties, we need to regenerate 
-        // the 'style' string so the CSS Visualizer and HTML layout stay in sync.
-        if (updated.type === 'shape' || updated.type === 'text') {
-           let newStyle = updated.style || "";
-           
-           // Apply color/background updates to the style string
-           if (attrs.color) {
-             if (updated.type === 'text') {
-               newStyle = newStyle.replace(/color:[^;]+;?/g, '') + `color:${attrs.color};`;
-             } else {
-               newStyle = newStyle.replace(/background:[^;]+;?/g, '') + `background:${attrs.color};`;
-             }
-           }
-           
-           // Apply opacity updates
-           if (attrs.opacity !== undefined) {
-             newStyle = newStyle.replace(/opacity:[^;]+;?/g, '') + `opacity:${attrs.opacity};`;
-           }
-           
-           updated.style = newStyle;
+        // Sync logical properties to the style string for all visual elements
+        if (['shape', 'text', 'image', 'svg'].includes(updated.type)) {
+          // Define which properties should be synced to CSS
+          const propsToSync: Record<string, any> = {};
+          if (attrs.x !== undefined) propsToSync.x = attrs.x;
+          if (attrs.y !== undefined) propsToSync.y = attrs.y;
+          if (attrs.width !== undefined) propsToSync.width = attrs.width;
+          if (attrs.height !== undefined) propsToSync.height = attrs.height;
+          if (attrs.opacity !== undefined) propsToSync.opacity = attrs.opacity;
+          
+          if (updated.type === 'text') {
+            if (attrs.color !== undefined) propsToSync.color = attrs.color;
+            if (attrs.fontSize !== undefined) propsToSync.fontSize = `${attrs.fontSize}px`;
+            if (attrs.fontFamily !== undefined) propsToSync.fontFamily = attrs.fontFamily;
+            if (attrs.fontWeight !== undefined) propsToSync.fontWeight = attrs.fontWeight;
+            if (attrs.textAlign !== undefined) propsToSync.textAlign = attrs.textAlign;
+          } else if (updated.type === 'shape') {
+            if (attrs.color !== undefined) propsToSync.color = attrs.color;
+            if (attrs.borderRadius !== undefined) propsToSync.borderRadius = `${attrs.borderRadius}px`;
+          }
+
+          updated.style = mergeStyles(el.style || "position:absolute;", propsToSync);
         }
-        
         return updated;
       }
       return el;
     });
     
-    // Notify parent about the change
     onChange(newElements);
     
-    // Always sync the HTML layout if any style-affecting attribute changed
     if (htmlLayout && onHtmlLayoutChange) {
       const el = newElements.find(e => e.id === id);
       if (el) {
@@ -958,7 +976,6 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
       }
     }
     
-    // Update history
     setHistory((prev) => {
       const nextHistory = prev.slice(0, historyStep + 1);
       nextHistory.push(newElements);
