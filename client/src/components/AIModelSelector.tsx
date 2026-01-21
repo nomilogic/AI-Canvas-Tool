@@ -46,7 +46,9 @@ const CLAUDE_MODELS = modelRegistry.claude?.models || [
 
 const GROQ_MODELS = modelRegistry.groq?.models || [
   "llama-3.3-70b-versatile",
+  "llama-3.1-70b-versatile",
   "mixtral-8x7b-32768",
+  "deepseek-r1-distill-llama-70b",
 ];
 
 export const AIModelSelector = () => {
