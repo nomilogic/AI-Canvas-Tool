@@ -413,7 +413,7 @@ function parseAbsoluteHtmlToTemplateElements(
           result.push(svgEl);
         } else {
           const textContent = (anyEl.textContent || "").trim();
-          const backgroundColor = style.backgroundColor || "";
+          const backgroundColor = style.backgroundColor || style.background || "";
           const borderRadiusCss = style.borderRadius || "";
           const borderRadius = borderRadiusCss ? toPx(borderRadiusCss) : undefined;
           const fontSize = style.fontSize ? toPx(style.fontSize) : 16;

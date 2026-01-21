@@ -2176,6 +2176,8 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
 
                           const colorCss = getCss('color');
                           const fontSizeCss = getCss('font-size');
+
+                          console.log('Selected Layer Style:', { id: el.id, bgColor, styleStr });
                           const fontWeightCss = getCss('font-weight');
                           const textAlignCss = getCss('text-align');
                           const textTransformCss = getCss('text-transform');
@@ -2349,10 +2351,17 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                                   <div>
                                     <span className="text-xs text-gray-500 block mb-1">Background</span>
                                       <input
+                                      type="text"
+                                      value={bgColor || ''}
+                                      onChange={(e) => applyCssPatch({ 'background-color': e.target.value })}
+                                      className="w-full bg-[#3e3e42] rounded px-2 py-1 text-xs mb-1"
+                                      placeholder="orange or #ff8800"
+                                      />
+                                      <input
                                       type="color"
                                       value={cssColorToHex(bgColor) ?? '#000000'}
                                       onChange={(e) => applyCssPatch({ 'background-color': e.target.value })}
-                                      className="h-7 w-full bg-[#3e3e42] rounded cursor-pointer"
+                                      className="h-7 w-full bg-[#3e3e42] rounded cursor-pointer border-0"
                                       />
                                   </div>
                                   <div>
