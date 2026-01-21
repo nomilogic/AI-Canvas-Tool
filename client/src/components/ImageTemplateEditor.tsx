@@ -2159,10 +2159,13 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                             const nextStyle = Object.entries(nextMap)
                               .map(([k, v]) => `${k}:${v}`)
                               .join(';');
+                            
+                            // 1. Update the canonical HTML source
                             const nextHtml = updateHtmlRawStyle(htmlLayout, el.id, nextStyle);
-                            // Update the canonical HTML and also sync the element's stored
-                            // inline style so the Layers panel and controls reflect changes.
                             onHtmlLayoutChange(nextHtml);
+
+                            // 2. IMPORTANT: Update the element state immediately so the React tree
+                            // and the TransformBox receive the new style string.
                             updateElement(el.id, { style: nextStyle } as any);
                           };
 
