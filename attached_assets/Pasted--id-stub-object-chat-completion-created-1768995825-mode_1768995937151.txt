@@ -1,0 +1,86 @@
+{
+    "id": "stub",
+    "object": "chat.completion",
+    "created": 1768995825,
+    "model": "groq/compound",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "\u003cdiv style=\"position:relative;width:1280px;height:720px;overflow:hidden;background:#ffffff;\"\u003e\n    \u003cdiv id=\"orange-box\" style=\"position:absolute;top:260px;left:540px;width:200px;height:200px;background-color:orange;\"\u003e\u003c/div\u003e\n\u003c/div\u003e",
+                "reasoning": "\nTo create an orange box on the canvas, I need to determine the size and position of the box. Since no specific dimensions or position were provided, I will assume a default size and position for the box.\n\nLet's assume the orange box will be 200x200 pixels in size and will be positioned at the center of the canvas.\n\nFirst, I need to calculate the top-left coordinates of the box to center it on the canvas.\n\n\u003ctool\u003e\npython(print(1280/2 - 100))  # Calculate x-coordinate\npython(print(720/2 - 100))   # Calculate y-coordinate\n\u003c/tool\u003e\n\u003coutput\u003eError occurred: error executing python: SyntaxError: unmatched ')' (2230986686.py, line 6)\n  Cell In[1], line 6\n    print(1280/2 - 100))  # Calculate x-coordinate\n                       ^\nSyntaxError: unmatched ')'\n\u003c/output\u003e\n\n\n\nI will recalculate the coordinates manually:\n\nx-coordinate = 1280 / 2 - 100 = 540\ny-coordinate = 720 / 2 - 100 = 260\n\nNow, I will create the HTML structure for the orange box.\n\n\n\n\u003cdiv style=\"position:relative;width:1280px;height:720px;overflow:hidden;background:#ffffff;\"\u003e\n    \u003cdiv id=\"orange-box\" style=\"position:absolute;top:260px;left:540px;width:200px;height:200px;background-color:orange;\"\u003e\u003c/div\u003e\n\u003c/div\u003e"
+            },
+            "logprobs": null,
+            "finish_reason": "stop"
+        }
+    ],
+    "usage": {
+        "queue_time": 0.018305,
+        "prompt_tokens": 4357,
+        "prompt_time": 0.15339,
+        "completion_tokens": 595,
+        "completion_time": 1.327302,
+        "total_tokens": 4952,
+        "total_time": 1.480693
+    },
+    "usage_breakdown": {
+        "models": [
+            {
+                "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+                "usage": {
+                    "queue_time": 0.004242035,
+                    "prompt_tokens": 725,
+                    "prompt_time": 0.019849351,
+                    "completion_tokens": 20,
+                    "completion_time": 0.045389897,
+                    "total_tokens": 745,
+                    "total_time": 0.065239248
+                }
+            },
+            {
+                "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+                "usage": {
+                    "queue_time": 0.004296339,
+                    "prompt_tokens": 1128,
+                    "prompt_time": 0.031119115,
+                    "completion_tokens": 221,
+                    "completion_time": 0.507568102,
+                    "total_tokens": 1349,
+                    "total_time": 0.538687217
+                }
+            },
+            {
+                "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+                "usage": {
+                    "queue_time": 0.004351752,
+                    "prompt_tokens": 1321,
+                    "prompt_time": 0.039929261,
+                    "completion_tokens": 123,
+                    "completion_time": 0.278091499,
+                    "total_tokens": 1444,
+                    "total_time": 0.31802076
+                }
+            },
+            {
+                "model": "openai/gpt-oss-120b",
+                "usage": {
+                    "queue_time": 0.005415492,
+                    "prompt_tokens": 1183,
+                    "prompt_time": 0.062492786,
+                    "completion_tokens": 231,
+                    "completion_time": 0.496252959,
+                    "total_tokens": 1414,
+                    "total_time": 0.558745745,
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 160
+                    }
+                }
+            }
+        ]
+    },
+    "x_groq": {
+        "id": "stub"
+    },
+    "service_tier": "on_demand"
+}

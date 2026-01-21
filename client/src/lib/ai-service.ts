@@ -769,8 +769,10 @@ Return ONLY the COMPLETE HTML structure that satisfies ALL rules above.
     canvasHeight: number,
     options?: GenerateLayoutOptions
   ): Promise<TemplateElement[]> {
-    const apiKey = this.config.groqApiKey || "";
-    const model = this.config.groqModel || (typeof window !== 'undefined' && localStorage.getItem('groq_model')) || "llama-3.3-70b-versatile";
+    const apiKey = this.config.groqApiKey || (typeof window !== 'undefined' && getStoredProviderKey('groq') as string) || '';
+    if (!apiKey) throw new Error('Groq API key is missing. Please add it in Settings ⚙️');
+
+    const model = this.config.groqModel || (typeof window !== 'undefined' && localStorage.getItem('groq_model')) || 'llama-3.3-70b-versatile';
 
     const strategy: AIGenerationStrategy = options?.strategy ?? "full";
 
@@ -823,7 +825,24 @@ Return ONLY the COMPLETE HTML structure that satisfies ALL rules above.
         return applyAiActions(currentElements, actions, canvasWidth, canvasHeight, userPrompt);
       }
 
-      // Extract JSON from response
+      // Try HTML parsing first (Groq compound models return HTML by default)
+      try {
+        const parsedHtml = content.includes('```html') 
+          ? content.split('```html')[1].split('```')[0].trim() 
+          : content;
+        
+        const parsedHtmlElements = parseHtmlElementsFromText(parsedHtml, canvasWidth, canvasHeight);
+        if (parsedHtmlElements && parsedHtmlElements.length > 0) return parsedHtmlElements;
+        
+        if (typeof document !== 'undefined') {
+          const domParsed = htmlToElements(parsedHtml, canvasWidth, canvasHeight);
+          if (domParsed.length > 0) return domParsed;
+        }
+      } catch (err) {
+        console.warn('Failed to parse Groq HTML output:', err);
+      }
+
+      // Extract JSON from response if HTML parsing fails
       const jsonMatch = content.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         const raw = JSON.parse(jsonMatch[0]);
