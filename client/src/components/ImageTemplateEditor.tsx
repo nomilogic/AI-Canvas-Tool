@@ -49,7 +49,16 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TemplateElement, TextElement, ShapeElement, SvgElement, LogoElement, GroupElement, IconElement, FilterProps, GradientProps, ShadowProps } from "../types/templates";
 import ClaudeChatBox from "./ClaudeChatBox";
-import { updateHtmlForTransforms, updateHtmlRawStyle, deleteHtmlElementsById, updateHtmlTextContent, appendElementsToHtml, updateHtmlSvgContent, elementsToHtml } from "../lib/layout-html";
+import { 
+  updateHtmlForTransforms, 
+  updateHtmlRawStyle, 
+  deleteHtmlElementsById, 
+  updateHtmlTextContent, 
+  appendElementsToHtml, 
+  updateHtmlSvgContent, 
+  elementsToHtml,
+  htmlToElements
+} from "../lib/layout-html";
 import AIModelSelector from "./AIModelSelector";
 import callPuterChat from "../lib/puter-client";
 import { toast } from "sonner";
