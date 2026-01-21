@@ -146,9 +146,18 @@ export function updateHtmlRawStyle(
   if (typeof document !== "undefined") {
     const container = document.createElement("div");
     container.innerHTML = stripScripts(html);
-    const el = container.querySelector<HTMLElement>(`[data-el-id="${id}"]`);
-    if (!el) return html;
+    
+    // Support both data-el-id and regular id attributes for maximum compatibility
+    const el = container.querySelector<HTMLElement>(`[data-el-id="${id}"], #${id}`);
+    if (!el) {
+      console.warn(`Element with ID ${id} not found in HTML for style update`);
+      return html;
+    }
+    
+    // Set the style attribute directly
     el.setAttribute("style", style || "");
+    
+    // If it's the root element, return its outerHTML, otherwise return container's innerHTML
     return container.innerHTML;
   }
 

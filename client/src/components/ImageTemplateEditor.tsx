@@ -2160,13 +2160,20 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
                               .map(([k, v]) => `${k}:${v}`)
                               .join(';');
                             
+                            // Log for debugging
+                            console.log('Applying CSS Patch:', { id: el.id, nextStyle });
+
                             // 1. Update the canonical HTML source
                             const nextHtml = updateHtmlRawStyle(htmlLayout, el.id, nextStyle);
-                            onHtmlLayoutChange(nextHtml);
-
-                            // 2. IMPORTANT: Update the element state immediately so the React tree
-                            // and the TransformBox receive the new style string.
-                            updateElement(el.id, { style: nextStyle } as any);
+                            
+                            // 2. Update the internal element state first
+                            const nextElements = elements.map(e => e.id === el.id ? { ...e, style: nextStyle } : e);
+                            
+                            // 3. Trigger changes
+                            onChange(nextElements);
+                            if (onHtmlLayoutChange) {
+                              onHtmlLayoutChange(nextHtml);
+                            }
                           };
 
                           const display = getCss('display');
