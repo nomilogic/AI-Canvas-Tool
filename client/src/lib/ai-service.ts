@@ -770,6 +770,7 @@ Return ONLY the COMPLETE HTML structure that satisfies ALL rules above.
     options?: GenerateLayoutOptions
   ): Promise<TemplateElement[]> {
     const apiKey = this.config.groqApiKey || "";
+    const model = this.config.groqModel || (typeof window !== 'undefined' && localStorage.getItem('groq_model')) || "llama-3.3-70b-versatile";
 
     const strategy: AIGenerationStrategy = options?.strategy ?? "full";
 
@@ -802,7 +803,7 @@ Return ONLY the COMPLETE HTML structure that satisfies ALL rules above.
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "mixtral-8x7b-32768",
+          model,
           messages,
           temperature: 0.3,
           max_tokens: 2048,

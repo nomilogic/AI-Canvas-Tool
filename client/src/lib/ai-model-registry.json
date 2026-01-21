@@ -82,7 +82,13 @@
   },
   "groq": {
     "api_base": "https://api.groq.com",
-    "models": ["mixtral-8x7b-32768"]
+    "models": [
+      "llama-3.3-70b-versatile",
+      "llama-3.1-70b-versatile",
+      "llama-3.1-8b-instant",
+      "mixtral-8x7b-32768",
+      "gemma2-9b-it"
+    ]
   },
   "cohere": {
     "api_base": "https://api.cohere.com/v1",

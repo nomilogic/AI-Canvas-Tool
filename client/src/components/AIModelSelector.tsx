@@ -44,6 +44,11 @@ const CLAUDE_MODELS = modelRegistry.claude?.models || [
   'claude-3-small',
 ];
 
+const GROQ_MODELS = modelRegistry.groq?.models || [
+  "llama-3.3-70b-versatile",
+  "mixtral-8x7b-32768",
+];
+
 export const AIModelSelector = () => {
   const [config, setConfig] = useState<AIConfig>(getAIConfig());
   const [open, setOpen] = useState(false);
@@ -364,16 +369,36 @@ export const AIModelSelector = () => {
 
           {/* Groq API Key */}
           {config.provider === "groq" && (
-            <div>
-              <label className="text-sm font-semibold text-gray-300 mb-2 block">Groq API Key</label>
-              <input
-                type="password"
-                value={providerKeyInput}
-                onChange={(e) => handleProviderKeyChange(e.target.value)}
-                placeholder="gsk_..."
-                className="w-full bg-[#3e3e42] border border-[#4e4e52] rounded px-3 py-2 text-white placeholder-gray-600 focus:outline-none focus:border-blue-500"
-              />
-              <p className="text-xs text-gray-500 mt-1">Stored as: ai-key:groq</p>
+            <div className="space-y-3">
+              <div>
+                <label className="text-sm font-semibold text-gray-300 mb-2 block">Groq Model</label>
+                <select
+                  value={(config as any).groqModel || localStorage.getItem('groq_model') || GROQ_MODELS[0]}
+                  onChange={(e) => {
+                    const nc = { ...config, groqModel: e.target.value } as AIConfig & any;
+                    setConfig(nc);
+                    saveAIConfig(nc);
+                    localStorage.setItem('groq_model', e.target.value);
+                  }}
+                  className="w-full bg-[#3e3e42] border border-[#4e4e52] rounded px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+                >
+                  {GROQ_MODELS.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Stored as: ai-key:groq</p>
+              </div>
+
+              <div>
+                <label className="text-sm font-semibold text-gray-300 mb-2 block">Groq API Key</label>
+                <input
+                  type="password"
+                  value={providerKeyInput}
+                  onChange={(e) => handleProviderKeyChange(e.target.value)}
+                  placeholder="gsk_..."
+                  className="w-full bg-[#3e3e42] border border-[#4e4e52] rounded px-3 py-2 text-white placeholder-gray-600 focus:outline-none focus:border-blue-500"
+                />
+              </div>
             </div>
           )}
 
