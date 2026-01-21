@@ -430,20 +430,76 @@ export const ImageTemplateEditor: React.FC<ImageTemplateEditorProps> = ({
   };
 
   // Add History
-  const addToHistory = (newElements: TemplateElement[], options?: { skipOnChange?: boolean }) => {
+  const addToHistory = (newElements: TemplateElement[], options?: { skipOnChange?: boolean; nextHtml?: string }) => {
     setHistory((prev) => {
       const nextHistory = prev.slice(0, historyStep + 1);
       nextHistory.push(newElements);
       return nextHistory;
     });
     setHistoryStep((prevStep) => prevStep + 1);
+    
     if (!options?.skipOnChange) {
       onChange(newElements);
+      const htmlToUse = options?.nextHtml || elementsToHtml(newElements, canvasSize);
       if (onHtmlLayoutChange) {
-        const newHtml = elementsToHtml(newElements, canvasSize);
-        onHtmlLayoutChange(newHtml);
+        onHtmlLayoutChange(htmlToUse);
       }
     }
+  };
+
+  useEffect(() => {
+    if (htmlLayout) {
+      const parsedElements = htmlToElements(htmlLayout, canvasSize.width, canvasSize.height);
+      // Only update if the number of elements changed or if we are in a state where elements list is empty
+      // but html has content. This avoids infinite loops from style normalization differences.
+      if (elements.length === 0 && parsedElements.length > 0) {
+        onChange(parsedElements);
+      } else if (parsedElements.length !== elements.length) {
+        onChange(parsedElements);
+      }
+    }
+  }, [htmlLayout, canvasSize.width, canvasSize.height]);
+
+  const addElement = (type: TemplateElement["type"], props: Partial<TemplateElement> = {}) => {
+    const id = crypto.randomUUID();
+    const newEl: TemplateElement = {
+      id,
+      type,
+      name: props.name || `New ${type}`,
+      x: 100,
+      y: 100,
+      width: type === 'text' ? 200 : 100,
+      height: type === 'text' ? 50 : 100,
+      rotation: 0,
+      visible: true,
+      locked: false,
+      zIndex: elements.length,
+      opacity: 1,
+      style: `position:absolute;left:100px;top:100px;width:${type === 'text' ? 200 : 100}px;height:${type === 'text' ? 50 : 100}px;background-color:${type === 'shape' ? '#3b82f6' : 'transparent'};color:#000000;display:flex;align-items:center;justify-content:center;`,
+      ...props,
+    };
+
+    const nextElements = [...elements, newEl];
+    // Use elementsToHtml directly to ensure full synchronization with the state
+    const nextHtml = elementsToHtml(nextElements, canvasSize);
+    addToHistory(nextElements, { nextHtml });
+    selectSingle(id);
+  };
+
+  const updateElement = (id: string, patch: Partial<TemplateElement>) => {
+    const nextElements = elements.map((el) =>
+      el.id === id ? { ...el, ...patch } : el
+    );
+    
+    let nextHtml = htmlLayout || "";
+    if (patch.style !== undefined) {
+      nextHtml = updateHtmlRawStyle(nextHtml, id, patch.style);
+    }
+    if (patch.content !== undefined && (patch.type === 'text')) {
+      nextHtml = updateHtmlTextContent(nextHtml, id, patch.content);
+    }
+    
+    addToHistory(nextElements, { nextHtml });
   };
 
   const undo = () => {
