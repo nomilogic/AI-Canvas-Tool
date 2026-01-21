@@ -23,10 +23,17 @@
   "gemini": {
     "api_base": "https://generativelanguage.googleapis.com/v1beta",
     "models": [
-      "gemini-2.0-flash",
-      "gemini-2.0-flash-lite-preview-02-05",
-      "gemini-1.5-pro",
-      "gemini-1.5-flash"
+    "gemini-3.0-pro-preview",
+    "gemini-3.0-flash-preview",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "imagen-4.0-generate-001",
+    "imagen-4.0-ultra-generate-001",
+    "imagen-3.0-generate-002",
+    "imagen-3.0-fast-generate-001"
     ]
   },
   "groq": {

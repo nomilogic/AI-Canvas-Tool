@@ -67,9 +67,9 @@ export function elementsToHtml(
     })
     .join("\n");
 
-  const rootStyle = `position:relative;width:${Math.round(width)}px;height:${Math.round(height)}px;overflow:hidden;background:#ffffff;`;
+ 
 
-  return `<div style="${rootStyle}">\n${children}\n</div>`;
+  return `${children}`;
 }
 
 function stripScripts(html: string): string {
