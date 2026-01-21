@@ -2,133 +2,73 @@
   "openai": {
     "api_base": "https://api.openai.com/v1",
     "models": [
-      "gpt-5.2",
-      "gpt-5.2-pro",
-      "gpt-5.1",
-      "gpt-5",
-      "gpt-5-mini",
-      "gpt-5-nano",
-      "gpt-4.1",
-      "gpt-4.1-mini",
-      "gpt-4.1-nano",
-      "gpt-oss-120b",
-      "gpt-oss-20b",
-      "o3",
-      "o3-mini",
-      "o4-mini-deep-research",
-      "gpt-image-1.5",
-      "chatgpt-image-latest",
-      "text-embedding-3-large",
-      "text-embedding-3-small",
-      "tts-1",
-      "tts-1-hd",
-      "whisper-1"
+      "openai/gpt-oss-120b",
+      "openai/gpt-oss-20b",
+      "openai/gpt-oss-safeguard-20b",
+      "gpt-4o",
+      "gpt-4o-mini",
+      "o3-mini"
     ]
   },
   "claude": {
     "api_base": "https://api.anthropic.com/v1",
     "models": [
-      "claude-opus-4.5",
-      "claude-opus-4.1",
-      "claude-opus-4",
-      "claude-sonnet-4.5",
-      "claude-sonnet-4.1",
-      "claude-haiku-4.5",
-      "claude-haiku-4.1",
-      "claude-sonnet-4",
-      "claude-3.7-sonnet",
-      "claude-3.5-sonnet-v2",
-      "claude-3.5-sonnet",
-      "claude-3-haiku",
+      "claude-3-7-sonnet",
+      "claude-3-5-sonnet-v2",
+      "claude-3-5-sonnet",
       "claude-3-opus",
-      "claude-3-large",
-      "claude-3-small"
+      "claude-3-haiku"
     ]
   },
   "gemini": {
     "api_base": "https://generativelanguage.googleapis.com/v1beta",
     "models": [
-      "gemini-3-flash-preview",
-      "gemini-2.5-flash-lite",
-      "gemini-2.5-flash",
-      "gemini-2.5-flash-preview-09-2025",
-      "gemini-3-flash",
-      "gemini-3-pro",
-      "gemini-2.5-pro",
-      "gemini-2.5-flash-image"
+      "gemini-2.0-flash",
+      "gemini-2.0-flash-lite-preview-02-05",
+      "gemini-1.5-pro",
+      "gemini-1.5-flash"
+    ]
+  },
+  "groq": {
+    "api_base": "https://api.groq.com",
+    "models": [
+      "groq/compound",
+      "groq/compound-mini",
+      "llama-3.3-70b-versatile",
+      "llama-3.1-8b-instant",
+      "mixtral-8x7b-32768",
+      "qwen/qwen3-32b",
+      "meta-llama/llama-4-scout-17b-16e-instruct",
+      "meta-llama/llama-4-maverick-17b-128e-instruct"
     ]
   },
   "deepseek": {
     "api_base": "https://api.deepseek.com",
     "models": [
-      "deepseek-v3.2-chat",
-      "deepseek-r1",
       "deepseek-chat",
-      "deepseek-reasoner",
-      "deepseek-general-v1",
-      "deepseek-vision-v1"
+      "deepseek-reasoner"
     ]
   },
   "huggingface": {
     "api_base": "https://api-inference.huggingface.co",
     "models": [
       "stabilityai/stable-diffusion-xl-base-1.0",
-      "stabilityai/stable-diffusion-2",
-      "runwayml/stable-diffusion-v1-5",
-      "DeepFloyd/IF",
-      "segmind/DreamShaper",
-      "openai/gpt-oss-120b"
-    ]
-  },
-  "groq": {
-    "api_base": "https://api.groq.com",
-    "models": [
-      "llama-3.3-70b-versatile",
-      "llama-3.1-70b-versatile",
-      "llama-3.1-8b-instant",
-      "mixtral-8x7b-32768",
-      "deepseek-r1-distill-llama-70b"
+      "runwayml/stable-diffusion-v1-5"
     ]
   },
   "cohere": {
     "api_base": "https://api.cohere.com/v1",
     "models": [
-      "cohere.command-r-plus-v1.0",
-      "cohere.command-r-v1.0",
-      "cohere.embed-english-v3",
-      "cohere.embed-multilingual-v3",
-      "command-a-03-2025",
-      "command-r7b-12-2024"
+      "command-r-plus",
+      "command-r"
     ]
   },
   "mistral": {
     "api_base": "https://api.mistral.ai/v1",
-    "models": ["mistral-large", "mixtral-8x7b", "mixtral-8x22b"]
+    "models": ["mistral-large-latest", "mistral-small-latest"]
   },
   "stability": {
     "api_base": "https://api.stability.ai",
-    "models": [
-      "stable-diffusion-xl-1.0",
-      "stable-diffusion-xl-0.8",
-      "sdxl-video-beta"
-    ]
-  },
-  "ai21": {
-    "api_base": "https://api.ai21.com/studio/v1",
-    "models": [
-      "j2-jumbo",
-      "j2-ultra",
-      "j2-grande",
-      "jamba-large-1.6",
-      "jamba-mini-1.6"
-    ]
-  },
-  "replicate": {
-    "api_base": "https://api.replicate.com/v1",
-    "models": []
-  },
-  "openrouter": {
-    "api_base": "https://openrouter.ai/api/v1",
-    "models": []
+    "models": ["stable-diffusion-xl-1024-v1-0"]
   }
 }

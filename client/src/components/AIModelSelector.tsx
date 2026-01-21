@@ -45,10 +45,12 @@ const CLAUDE_MODELS = modelRegistry.claude?.models || [
 ];
 
 const GROQ_MODELS = modelRegistry.groq?.models || [
+  "groq/compound",
+  "groq/compound-mini",
   "llama-3.3-70b-versatile",
-  "llama-3.1-70b-versatile",
+  "llama-3.1-8b-instant",
   "mixtral-8x7b-32768",
-  "deepseek-r1-distill-llama-70b",
+  "qwen/qwen3-32b",
 ];
 
 export const AIModelSelector = () => {
